@@ -1,0 +1,821 @@
+import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
+import { Input } from './input';
+import { World, islandRadius, BALL, BRIDGE } from './world';
+import { Cow, COW_SCALE } from './cow';
+import { NPCFactory, isSweater } from './npc';
+import type { NPCPhysics } from './npc';
+import { MissionManager } from './missions';
+
+export class Game {
+  private scene!: THREE.Scene;
+  private camera!: THREE.PerspectiveCamera;
+  private renderer!: THREE.WebGLRenderer;
+  private lastTime = performance.now();
+  private physics!: RAPIER.World;
+  private input!: Input;
+  private world!: World;
+  private cow!: Cow;
+  private npcFactory!: NPCFactory;
+  private npcs: NPCPhysics[] = [];
+
+  private score = 0;
+  private chaos = 0;
+  private carrying: NPCPhysics | null = null;
+  private camDist = 16;
+  private camYaw = 0;
+  private camPitch = 0.45;
+  private started = false;
+  private physAcc = 0;
+  private wallRunning = false;
+  private wallRunTimer = 0;
+  private wallRunDir = new THREE.Vector3();
+  private wallRunNormal = new THREE.Vector3();
+  private particles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
+  private missions = new MissionManager();
+  private sweaterHintAt = 0;
+  private wasSwimming = false;
+  private swimSplashT = 0;
+
+constructor() {}
+
+  readonly loadTimes: Record<string, number> = {};
+
+  async start() {
+    const loading = this.createLoadingScreen();
+    const t0 = performance.now();
+    const mark = (k: string) => { this.loadTimes[k] = Math.round(performance.now() - t0); };
+    try {
+      await RAPIER.init();
+      mark('rapier');
+      loading(20, 'Carregando fisica Rapier...');
+      this.setupScene(loading);
+      this.setupInput();
+      await this.buildWorld(loading);
+      mark('world');
+      this.setupHUD();
+      loading(100, 'Pronto!');
+      setTimeout(() => {
+        const el = document.getElementById('loading');
+        if (el) el.style.display = 'none';
+      }, 150);
+      this.animate();
+    } catch (e) {
+      console.error(e);
+      const el = document.getElementById('loading');
+      if (el) el.innerHTML = '<div style="color:#f55">Erro ao carregar: ' + (e as Error).message + '</div>';
+    }
+  }
+
+  private createLoadingScreen(): (pct: number, label: string) => void {
+    const el = document.createElement('div');
+    el.id = 'loading';
+    el.innerHTML = '<div>Carregando Cow Rampage 3D...</div><div class="bar"><div class="fill" id="loadfill"></div></div><div id="loadlabel" style="font-size:14px;color:#888;margin-top:8px"></div>';
+    document.body.appendChild(el);
+    return (pct, label) => {
+      const fill = document.getElementById('loadfill');
+      const lbl = document.getElementById('loadlabel');
+      if (fill) (fill as HTMLElement).style.width = pct + '%';
+      if (lbl) lbl.textContent = label;
+    };
+  }
+
+  private setupScene(loading: (pct: number, label: string) => void) {
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x87ceeb);
+    this.scene.fog = new THREE.Fog(0x87ceeb, 800, 2500);
+
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 6000);
+
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    document.body.appendChild(this.renderer.domElement);
+
+    this.scene.add(new THREE.AmbientLight(0x606080, 0.6));
+    const dl = new THREE.DirectionalLight(0xfff5e0, 1.2);
+    dl.position.set(50, 80, 30);
+    dl.castShadow = true;
+    dl.shadow.mapSize.width = 2048;
+    dl.shadow.mapSize.height = 2048;
+    dl.shadow.camera.left = -250;
+    dl.shadow.camera.right = 250;
+    dl.shadow.camera.top = 250;
+    dl.shadow.camera.bottom = -250;
+    this.scene.add(dl);
+    this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4));
+
+    window.addEventListener('resize', () => {
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    loading(15, 'Criando cena...');
+  }
+
+  private setupInput() {
+    this.input = new Input(this.renderer.domElement);
+    this.input.onLockError = () => {
+      this.showMessage('Mouse recusado: clique de novo ou arraste pra olhar');
+    };
+    this.renderer.domElement.addEventListener('click', () => {
+      if (this.started) this.input.requestLock();
+    });
+    // clica em qualquer lugar pra (re)ativar o mouse (ex.: depois do Esc)
+    document.addEventListener('mousedown', () => {
+      if (this.started && !this.input.mouseLocked) this.input.requestLock();
+    });
+    document.addEventListener('click', () => {
+      if (this.started && !this.input.mouseLocked) this.input.requestLock();
+    });
+  }
+
+  private async buildWorld(loading: (pct: number, label: string) => void) {
+    this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    this.world = new World(this.scene, this.physics, loading);
+    loading(5, 'Criando chao...');
+
+    await this.world.buildBuildings(40);
+    await this.world.buildTrees(100);
+    this.world.buildCannons(16);
+    await this.world.buildGrass(3000);
+    this.world.buildDistricts();
+
+    this.cow = new Cow(this.scene, this.physics, 0, 8);
+    (window as unknown as Record<string, unknown>).__game = this;
+    this.npcFactory = new NPCFactory();
+    for (let i = 0; i < 60; i++) {
+      let x = 20, z = 20;
+      for (let a = 0; a < 40; a++) {
+        const th = Math.random() * Math.PI * 2;
+        const rr = Math.sqrt(Math.random()) * (islandRadius(th, true) - 14);
+        const px = Math.cos(th) * rr;
+        const pz = Math.sin(th) * rr;
+        if (Math.hypot(px, pz - 8) < 15) continue;
+        x = px; z = pz; break;
+      }
+      this.npcs.push(this.npcFactory.create(this.scene, this.physics, x, z));
+    }
+    // bodes da cidade das cabras
+    await this.world.buildForestPatch(-800, 200, 150, 150);
+    for (let i = 0; i < 10; i++) {
+      const th = Math.random() * Math.PI * 2;
+      const rr = Math.sqrt(Math.random()) * 30;
+      const gx = -750 + Math.cos(th) * rr;
+      const gz = 850 + Math.sin(th) * rr;
+      this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz, 'goat'));
+    }
+    // trabalhadores da fazenda (ilha redonda)
+    for (let i = 0; i < 8; i++) {
+      const th = Math.random() * Math.PI * 2;
+      const rr = Math.sqrt(Math.random()) * 60;
+      this.npcs.push(this.npcFactory.create(
+        this.scene, this.physics, BALL.x + Math.cos(th) * rr, BALL.z + Math.sin(th) * rr));
+    }
+    loading(95, 'Criando NPCs...');
+  }
+
+  private setupHUD() {
+    const hud = document.createElement('div');
+    hud.id = 'hud';
+    hud.innerHTML = `
+      <div>Score: <span id="score">0</span></div>
+      <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
+      <div id="carry-status"></div>
+    `;
+    document.body.appendChild(hud);
+
+    const controls = document.createElement('div');
+    controls.id = 'controls';
+    controls.textContent = 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
+    document.body.appendChild(controls);
+
+    const msg = document.createElement('div');
+    msg.id = 'msg';
+    document.body.appendChild(msg);
+
+    const mousehint = document.createElement('div');
+    mousehint.id = 'mousehint';
+    mousehint.textContent = 'Clique na tela para ativar o mouse (arrastar tambem olha)';
+    document.body.appendChild(mousehint);
+
+    const mission = document.createElement('div');
+    mission.id = 'mission';
+    document.body.appendChild(mission);
+
+    this.missions.onComplete = (done, next) => {
+      this.score += done.reward;
+      this.chaos = Math.min(100, this.chaos + 10);
+      const p = this.cow.group.position;
+      this.spawnParticles(p.x, p.y + 2, p.z, 20, 0xffcc32);
+      this.showMessage(next
+        ? `+${done.reward} pts! Nova: ${next.title}`
+        : `+${done.reward} pts! TODAS COMPLETAS 🏆`);
+    };
+
+    const start = document.createElement('div');
+    start.id = 'start';
+    start.innerHTML = `
+      <h1>COW RAMPAGE 3D</h1>
+      <h2>Goat Simulator Edition</h2>
+      <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
+      <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
+      <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
+      <button id="playBtn">CLIQUE PARA JOGAR</button>
+    `;
+    document.body.appendChild(start);
+    start.addEventListener('click', () => this.startGame());
+    document.getElementById('playBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.startGame();
+    });
+  }
+
+  private startGame() {
+    const start = document.getElementById('start');
+    if (start) start.style.display = 'none';
+    this.started = true;
+    this.input.requestLock();
+    this.showMessage('BOA SORTE!');
+  }
+
+  private showMessage(text: string) {
+    const el = document.getElementById('msg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.opacity = '1';
+    window.setTimeout(() => { el.style.opacity = '0'; }, 1500);
+  }
+
+  private updateHUD() {
+    document.getElementById('score')!.textContent = String(this.score);
+    const fill = document.getElementById('chaos-fill');
+    if (fill) fill.style.width = this.chaos + '%';
+    document.getElementById('chaos-pct')!.textContent = Math.round(this.chaos) + '%';
+
+    let status = '';
+    const cx = this.cow.group.position.x;
+    const cz = this.cow.group.position.z;
+    if (this.carrying) {
+      status = 'Carregando! [E] Canhao | [F] Soltar';
+    } else {
+      const nearCannon = this.world.cannons.some((c) =>
+        Math.hypot(c.x - cx, c.z - cz) < 10 && c.loadedNPC !== null);
+      const emptyCannon = this.world.cannons.some((c) =>
+        Math.hypot(c.x - cx, c.z - cz) < 10 && c.loadedNPC === null);
+      const nearNPC = this.npcs.some((n) =>
+        (n.state === 'walk' || n.state === 'stunned' || n.state === 'fallen') &&
+        Math.hypot(n.body.translation().x - cx, n.body.translation().z - cz) < 10);
+      if (nearCannon) status = '[E] DISPARAR canhao!';
+      else if (emptyCannon) status = 'Canhao vazio - pegue alguem [E]';
+      else if (nearNPC) status = '[E] Pegar pessoa';
+    }
+    document.getElementById('carry-status')!.textContent = status;
+
+    const hint = document.getElementById('mousehint');
+    if (hint) hint.style.display = (this.started && !this.input.mouseLocked) ? 'block' : 'none';
+
+    const mp = document.getElementById('mission');
+    if (mp) {
+      const m = this.missions.current();
+      if (!m) {
+        mp.innerHTML = '🏆 <b>Todas as missões completas!</b><br><span>Modo livre: cause caos!</span>';
+      } else {
+        let prog: string;
+        if (m.id === 'fama') prog = `${Math.min(this.score, m.target)}/${m.target} pts`;
+        else if (m.id === 'passeio') prog = `${Math.floor(this.missions.progress)}/${m.target}s`;
+        else prog = `${Math.min(Math.floor(this.missions.progress), m.target)}/${m.target}`;
+        mp.innerHTML = `<b>${m.title}</b><br><span>${m.desc}</span><br><span class="mp">${prog}</span>`;
+      }
+    }
+  }
+
+  private spawnParticles(x: number, y: number, z: number, n: number, color = 0xffcc32) {
+    const mat = new THREE.MeshBasicMaterial({ color });
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), mat);
+      m.position.set(x, y, z);
+      this.scene.add(m);
+      this.particles.push({
+        mesh: m,
+        vel: new THREE.Vector3((Math.random() - 0.5) * 0.3, Math.random() * 0.2 + 0.1, (Math.random() - 0.5) * 0.3),
+        life: 30 + Math.random() * 30,
+      });
+    }
+  }
+
+  private randomMsg(): string {
+    const msgs = [
+      'BOOOM!', 'CABECADA!', 'MIIINHU!', 'CRASH!', 'WALL RUN!', 'AAAAH!', 'SOCO NAS COSTAS!', 'PFWEEE!', 'DERROUBOU!',
+    ];
+    return msgs[Math.floor(Math.random() * msgs.length)];
+  }
+
+  private doInteract() {
+    const cx = this.cow.group.position.x;
+    const cz = this.cow.group.position.z;
+
+    if (this.carrying) {
+      const near = this.world.cannons.find((c) => Math.hypot(c.x - cx, c.z - cz) < 10);
+      if (near) {
+        // se o canhao ja tem alguem, tira o antigo antes (vira fallen, continua pegavel)
+        if (near.loadedNPC !== null) {
+          const old = this.npcs.find((n) => n.id === near.loadedNPC);
+          if (old) {
+            this.setNPCState(old, 'fallen');
+            old.stateTimer = 4;
+            old.body.setTranslation({ x: near.x + 2, y: 1.5, z: near.z + 2 }, true);
+          }
+        }
+        near.loadedNPC = this.carrying.id;
+        this.missions.event('load');
+        this.setNPCState(this.carrying, 'inCannon');
+        this.carrying.body.setTranslation({ x: near.x, y: 2, z: near.z + 2 }, true);
+        this.carrying.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        this.carrying = null;
+        this.showMessage('Colocado no canhao! E de novo pra atirar!');
+        return;
+      }
+      this.dropCarried();
+      return;
+    }
+
+    // canhao carregado -> disparar
+    const loadedCannon = this.world.cannons.find((c) =>
+      c.loadedNPC !== null && Math.hypot(c.x - cx, c.z - cz) < 10);
+    if (loadedCannon) {
+      const npc = this.npcs.find((n) => n.id === loadedCannon.loadedNPC);
+      if (npc) {
+        this.setNPCState(npc, 'launched');
+        npc.body.setLinvel({ x: 0, y: 12, z: 8 }, true);
+        npc.body.setAngvel({ x: 2, y: 0, z: 0 }, true);
+        loadedCannon.loadedNPC = null;
+        this.missions.event('fire');
+        this.score += 15;
+        this.chaos = Math.min(100, this.chaos + 25);
+        this.showMessage('BOOOM!');
+        this.spawnParticles(npc.body.translation().x, npc.body.translation().y, npc.body.translation().z, 15, 0xff6600);
+      }
+      return;
+    }
+
+    // pegar pessoa (vale andando, atordoada ou caida)
+    let best: NPCPhysics | null = null;
+    let bestDist = 10;
+    for (const n of this.npcs) {
+      if (n.state !== 'walk' && n.state !== 'stunned' && n.state !== 'fallen') continue;
+      const t = n.body.translation();
+      const d = Math.hypot(t.x - cx, t.z - cz);
+      if (d < bestDist) {
+        bestDist = d;
+        best = n;
+      }
+    }
+    if (best) {
+      this.carrying = best;
+      this.setNPCState(best, 'carried');
+      this.showMessage('Pegou! E no canhao!');
+    }
+  }
+
+  private dropCarried() {
+    if (!this.carrying) return;
+    const npc = this.carrying;
+    this.setNPCState(npc, 'stunned');
+    npc.stateTimer = 4;
+    const v = this.cow.body.linvel();
+    npc.body.setLinvel({ x: v.x, y: 2, z: v.z }, true);
+    this.carrying = null;
+    this.showMessage('Soltou!');
+  }
+
+  private setNPCState(npc: NPCPhysics, state: NPCPhysics['state'], timer = 0) {
+    npc.state = state;
+    npc.stateTimer = timer;
+    // carregando/no canhao vira sensor: nao engancha nas paredes nem empurra a vaca
+    npc.collider.setSensor(state === 'carried' || state === 'inCannon');
+    // desbloqueia rotacao quando nao está andando normal
+    if (state !== 'walk') {
+      npc.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+  }
+
+  private cowAttack() {
+    const cx = this.cow.group.position.x;
+    const cz = this.cow.group.position.z;
+    for (const n of this.npcs) {
+      if (n.state !== 'walk') continue;
+      const t = n.body.translation();
+      const dx = t.x - cx;
+      const dz = t.z - cz;
+      const d = Math.hypot(dx, dz);
+      if (d < 5) {
+        this.setNPCState(n, 'stunned');
+        n.stateTimer = 5;
+        const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(300);
+        n.body.applyImpulse({ x: push.x, y: 200, z: push.z }, true);
+        this.score += 3;
+        this.chaos = Math.min(100, this.chaos + 5);
+        this.missions.event('headbutt');
+        this.missions.event('knock');
+        this.showMessage('CABECADA!');
+        this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
+      }
+    }
+  }
+
+  private updateCow(dt: number) {
+    const running = this.input.isDown('ShiftLeft', 'ShiftRight');
+    const speed = running ? 9 : 5;
+
+    const fwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+    const rgt = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
+    const move = new THREE.Vector3();
+    if (this.input.isDown('KeyW', 'ArrowUp')) move.add(fwd);
+    if (this.input.isDown('KeyS', 'ArrowDown')) move.sub(fwd);
+    if (this.input.isDown('KeyA', 'ArrowLeft')) move.add(rgt);
+    if (this.input.isDown('KeyD', 'ArrowRight')) move.sub(rgt);
+
+    const body = this.cow.body;
+    const currentVel = body.linvel();
+    const t = body.translation();
+
+    if (!this.wallRunning) {
+      const inWater = !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2);
+      if (move.length() > 0) {
+        move.normalize().multiplyScalar(speed * (inWater ? 0.45 : 1));
+        // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
+        body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
+        this.cow.yaw = Math.atan2(move.x, move.z);
+      } else {
+        const f = Math.max(0, 1 - dt * 12);
+        body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
+      }
+
+      // nado: flutua + splash (antes do pulo pra remada funcionar)
+      if (inWater) {
+        if (!this.wasSwimming) {
+          this.showMessage('🐄🌊');
+          this.wasSwimming = true;
+        }
+        const cw = body.translation();
+        const buoyVY = (0.6 - cw.y) * 8;
+        const wv = body.linvel();
+        body.setLinvel({ x: wv.x, y: buoyVY, z: wv.z }, true);
+        this.swimSplashT -= dt;
+        if (this.swimSplashT <= 0 && Math.hypot(wv.x, wv.z) > 2) {
+          this.swimSplashT = 0.3;
+          this.spawnParticles(cw.x, 0.2, cw.z, 3, 0x3a8fcf);
+        }
+      } else {
+        this.wasSwimming = false;
+      }
+
+      // pulo (na agua vira remada)
+      const jump = this.input.consumeOnce('Space');
+      if (jump) {
+        if (inWater) {
+          const v = body.linvel();
+          body.setLinvel({ x: v.x * 0.6 + fwd.x * 3, y: 5, z: v.z * 0.6 + fwd.z * 3 }, true);
+          this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
+        } else if (this.cow.jumpCount < this.cow.maxJumps) {
+          this.cow.applyJump(running ? 10 : 8.5);
+          this.cow.jumpCount++;
+          this.spawnParticles(this.cow.group.position.x, 0.1, this.cow.group.position.z, 4, 0xffffff);
+          // Wall run: double jump NO AR perto de predio
+          if (this.cow.jumpCount >= 2 && !this.cow.grounded) this.tryStartWallRun();
+        }
+      }
+
+      // detecta chao via raycast (exclui o proprio corpo da vaca!)
+      const ray = new RAPIER.Ray(t, { x: 0, y: -1, z: 0 });
+      const hit = this.physics.castRay(ray, 1.1 * COW_SCALE + 0.4, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, this.cow.body);
+      const wasGrounded = this.cow.grounded;
+      this.cow.grounded = hit !== null && !inWater;
+      if (this.cow.grounded && !wasGrounded) {
+        this.cow.resetJumps();
+      }
+    } else {
+      // WALL RUN: corre ao longo da parede, grudado pela velocidade (sem teleporte)
+      const near = this.nearBuilding(t.x, t.z, 2.5);
+      if (!near) {
+        this.wallRunning = false;
+        this.showMessage('Caiu da parede!');
+      } else {
+        this.wallRunNormal.set(near.nx, 0, near.nz);
+        // direcao ao longo da parede segue a camera (mouse dirige)
+        const right = new THREE.Vector3(-near.nz, 0, near.nx);
+        const camFwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+        if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
+        this.wallRunDir.copy(right);
+        const back = this.input.isDown('KeyS', 'ArrowDown');
+        const wrDir = back ? this.wallRunDir.clone().multiplyScalar(-1) : this.wallRunDir.clone();
+        const spd = running ? 12 : 8;
+        body.setLinvel({
+          x: wrDir.x * spd - this.wallRunNormal.x * 2,
+          y: 0,
+          z: wrDir.z * spd - this.wallRunNormal.z * 2,
+        }, true);
+        this.cow.yaw = Math.atan2(wrDir.x, wrDir.z);
+
+        this.wallRunTimer -= dt;
+        const leave = this.input.consumeOnce('Space');
+        if (leave) {
+          body.setLinvel({ x: this.wallRunNormal.x * 6, y: 9, z: this.wallRunNormal.z * 6 }, true);
+          this.wallRunning = false;
+          this.cow.resetJumps();
+          this.showMessage('PULOU DA PAREDE!');
+        } else if (this.wallRunTimer <= 0) {
+          this.wallRunning = false;
+          this.cow.resetJumps();
+        }
+      }
+    }
+
+    if (this.input.isDown('KeyR')) {
+      this.showMessage('MORTAL!');
+      this.input.keys['KeyR'] = false;
+      const v = body.linvel();
+      body.setLinvel({ x: v.x, y: Math.max(v.y, 5.5), z: v.z }, true);
+      this.cow.startFlip();
+    }
+
+    this.cow.syncMesh();
+    const lv = body.linvel();
+    this.cow.update(dt, Math.hypot(lv.x, lv.z), !this.cow.grounded);
+    this.updateCarried(dt);
+  }
+
+  private onBridge(x: number, z: number): boolean {
+    return x > BRIDGE.x0 - 0.5 && x < BRIDGE.x1 + 0.5 && z > BRIDGE.z0 && z < BRIDGE.z1;
+  }
+
+  private nearBuilding(x: number, z: number, maxD: number): { nx: number; nz: number } | null {
+    let best: { nx: number; nz: number } | null = null;
+    let bestD = maxD;
+    for (const b of this.world.buildings) {
+      const cx = Math.max(b.x - b.halfW, Math.min(x, b.x + b.halfW));
+      const cz = Math.max(b.z - b.halfD, Math.min(z, b.z + b.halfD));
+      const dx = x - cx;
+      const dz = z - cz;
+      const d = Math.hypot(dx, dz);
+      if (d < bestD) {
+        bestD = d;
+        best = { nx: dx / (d || 1), nz: dz / (d || 1) };
+      }
+    }
+    return best;
+  }
+
+  private tryStartWallRun() {
+    const t = this.cow.body.translation();
+    const near = this.nearBuilding(t.x, t.z, 4);
+    if (!near) return;
+    this.wallRunning = true;
+    this.wallRunTimer = 2.0;
+    this.wallRunNormal.set(near.nx, 0, near.nz);
+    // direcao ao longo da parede: perpendicular a normal, seguindo a camera
+    const right = new THREE.Vector3(-near.nz, 0, near.nx);
+    const camFwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+    if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
+    this.wallRunDir.copy(right);
+    this.missions.event('wallrun');
+    this.showMessage(this.randomMsg());
+    this.spawnParticles(t.x, t.y, t.z, 8, 0xffffff);
+  }
+
+  private updateCarried(dt: number) {
+    void dt;
+    if (!this.carrying) return;
+    const t = this.cow.body.translation();
+    const yaw = this.cow.yaw;
+    const offset = new THREE.Vector3(
+      -Math.sin(yaw) * 0.3,
+      0,
+      -Math.cos(yaw) * 0.3,
+    );
+    const target = new THREE.Vector3(t.x + offset.x, t.y + 1.55 * COW_SCALE, t.z + offset.z);
+    const body = this.carrying.body;
+    const cur = body.translation();
+    body.setTranslation({
+      x: cur.x + (target.x - cur.x) * 0.4,
+      y: cur.y + (target.y - cur.y) * 0.4,
+      z: cur.z + (target.z - cur.z) * 0.4,
+    }, true);
+    body.setLinvel({ x: (target.x - cur.x) * 6, y: (target.y - cur.y) * 6, z: (target.z - cur.z) * 6 }, true);
+    this.carrying.mesh.position.set(target.x, target.y - 0.72, target.z);
+    this.carrying.mesh.rotation.y = yaw;
+  }
+
+  private updateNPCs(dt: number) {
+    for (const n of this.npcs) {
+      const t = n.body.translation();
+      switch (n.state) {
+        case 'walk': {
+          const v = n.body.linvel();
+          // se travou numa parede, vira (sem oscilacao: chance por frame)
+          const blocked = (n.walkDir > 0 && v.x < n.speed * 0.3) || (n.walkDir < 0 && v.x > -n.speed * 0.3);
+          if ((blocked && Math.random() < 0.05) || Math.random() < 0.002) n.walkDir *= -1;
+          const onBall = Math.hypot(t.x - BALL.x, t.z - BALL.z) < BALL.r - 8;
+          if (!onBall && Math.hypot(t.x, t.z) > islandRadius(Math.atan2(t.z, t.x), true) - 10) n.walkDir *= -1;
+          n.body.setLinvel({ x: n.walkDir * n.speed, y: v.y, z: v.z }, true);
+          break;
+        }
+        case 'stunned':
+        case 'fallen': {
+          if (n.stateTimer > 0) {
+            n.stateTimer -= dt;
+            if (n.stateTimer <= 0) {
+              this.setNPCState(n, 'walk');
+              n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+              n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+            }
+          }
+          break;
+        }
+        case 'launched': {
+          // exclui o proprio corpo: senao "pousa" no ar na hora do disparo
+          const fall = this.physics.castRay(new RAPIER.Ray(t, { x: 0, y: -1, z: 0 }), 1.2, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, n.body);
+          if (fall !== null) {
+            this.setNPCState(n, 'stunned');
+            n.stateTimer = 6;
+            n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+            n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+            this.score += 3;
+            this.chaos = Math.min(100, this.chaos + 3);
+            this.showMessage(this.randomMsg());
+            this.spawnParticles(t.x, t.y, t.z, 6, 0xffcc32);
+          }
+          break;
+        }
+        case 'carried':
+        case 'inCannon':
+          break;
+      }
+      // colisao com vaca aproximada (empurrar pessoas)
+      const cx = this.cow.group.position.x;
+      const cz = this.cow.group.position.z;
+      const d = Math.hypot(t.x - cx, t.z - cz);
+      if (d < 2.4 && this.carrying !== n && n.state === 'walk') {
+        this.setNPCState(n, 'stunned');
+        n.stateTimer = 3;
+        n.body.setLinvel({ x: (t.x - cx) * 3, y: 3, z: (t.z - cz) * 3 }, true);
+        this.score += 2;
+        this.chaos = Math.min(100, this.chaos + 2);
+        this.missions.event('knock');
+      }
+      this.npcFactory.syncMesh(n);
+      // afogado (ex.: lançado pelo canhão na água): volta pra ilha principal
+      if (t.y < 0.5 && n.state !== 'carried' && n.state !== 'inCannon'
+        && !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2)) {
+        this.spawnParticles(t.x, 0.5, t.z, 8, 0x3a8fcf);
+        let rx = 20, rz = 20;
+        for (let a = 0; a < 12; a++) {
+          const th = Math.random() * Math.PI * 2;
+          const rr = Math.sqrt(Math.random()) * (islandRadius(th, true) - 12);
+          const px = Math.cos(th) * rr;
+          const pz = Math.sin(th) * rr;
+          if (Math.hypot(px, pz - 8) < 15) continue;
+          rx = px; rz = pz; break;
+        }
+        n.body.setTranslation({ x: rx, y: 4, z: rz }, true);
+        n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        if (n.state === 'launched') {
+          this.setNPCState(n, 'stunned');
+          n.stateTimer = 3;
+        }
+      }
+      // marcador ▼ dourado só aparece durante a missão das folhas
+      const mk = n.mesh.userData['sweaterMarker'] as THREE.Mesh | undefined;
+      if (mk) {
+        const show = this.missions.current()?.id === 'folhas'
+          && n.state !== 'inCannon' && n.state !== 'launched';
+        mk.visible = show === true;
+        if (show) mk.position.y = 2.75 + Math.sin(performance.now() / 300) * 0.15;
+      }
+    }
+  }
+
+  private updateBullets() {
+    for (const c of this.world.cannons) {
+      if (c.loadedNPC !== null) {
+        const npc = this.npcs.find((n) => n.id === c.loadedNPC);
+        if (npc) {
+          npc.body.setTranslation({ x: c.x, y: 2, z: c.z + 2 }, true);
+          npc.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+          npc.mesh.position.set(c.x, 2 - 0.72, c.z + 2);
+        }
+      }
+    }
+  }
+
+  private updateParticles() {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.mesh.position.add(p.vel);
+      p.vel.y -= 0.005;
+      p.life--;
+      if (p.life <= 0) {
+        this.scene.remove(p.mesh);
+        this.particles.splice(i, 1);
+      }
+    }
+  }
+
+  private updateCamera() {
+    const t = this.cow.group.position;
+    // neblina e alcance acompanham o zoom (de longe dá pra ver a ilha inteira)
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) {
+      fog.near = 800;
+      fog.far = Math.max(2500, this.camDist * 2.2);
+    }
+    const wantFar = Math.max(6000, this.camDist * 2.5 + 2000);
+    if (Math.abs(this.camera.far - wantFar) > 1) {
+      this.camera.far = wantFar;
+      this.camera.updateProjectionMatrix();
+    }
+    const targetX = t.x - Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
+    const targetY = t.y + 3 + Math.sin(this.camPitch) * this.camDist;
+    const targetZ = t.z - Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);
+    this.camera.position.lerp(new THREE.Vector3(targetX, targetY, targetZ), 0.12);
+    this.camera.lookAt(t.x, t.y + 2.5, t.z);
+  }
+
+  private update(dt: number) {
+    if (!this.started) return;
+    this.input.syncLock();
+    // timestep fixo: fisica em tempo real mesmo com fps baixo
+    this.physAcc += dt;
+    let steps = 0;
+    while (this.physAcc >= 1 / 60 && steps < 5) {
+      this.physics.step();
+      this.physAcc -= 1 / 60;
+      steps++;
+    }
+    if (steps === 5) this.physAcc = 0;
+
+    const md = this.input.takeMouseDelta();
+    // com pointer lock OU arrastando o mouse (fallback se o lock falhar)
+    if (this.input.mouseLocked || this.input.mouseDown) {
+      this.camYaw += md.x * 0.003;
+      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003));
+    }
+    const wd = this.input.takeWheelDelta();
+    if (wd !== 0) {
+      // zoom multiplicativo (livre até 3000m) com trava embaixo pra não entrar na vaca
+      this.camDist = Math.max(8, Math.min(3000, this.camDist * (1 + wd * 0.002)));
+    }
+
+    if (this.input.isDown('KeyE')) {
+      this.input.keys['KeyE'] = false;
+      this.doInteract();
+    }
+    if (this.input.isDown('KeyQ')) {
+      this.input.keys['KeyQ'] = false;
+      this.cowAttack();
+    }
+    if (this.input.isDown('KeyF') && this.carrying) {
+      this.input.keys['KeyF'] = false;
+      this.dropCarried();
+    }
+
+    this.updateCow(dt);
+    this.updateNPCs(dt);
+    this.updateBullets();
+    this.world.updatePumps(dt);
+    this.missions.update(dt, {
+      carrying: this.carrying ? {
+        isSweater: isSweater(this.carrying),
+        x: this.carrying.body.translation().x,
+        y: this.carrying.body.translation().y,
+        z: this.carrying.body.translation().z,
+      } : null,
+      trees: this.world.trees,
+      score: this.score,
+      chaos: this.chaos,
+    });
+    // carregando a pessoa errada na missão das folhas? avisa (com cooldown)
+    if (this.missions.current()?.id === 'folhas' && this.carrying && !isSweater(this.carrying)) {
+      const now = performance.now();
+      if (now - this.sweaterHintAt > 4000) {
+        this.sweaterHintAt = now;
+        this.showMessage('Esse não é de sueter! Procure o ▼ amarelo 🍂');
+      }
+    }
+    this.updateParticles();
+    this.updateCamera();
+    this.updateHUD();
+  }
+
+  private animate() {
+    requestAnimationFrame(() => this.animate());
+    const now = performance.now();
+    const dt = Math.min((now - this.lastTime) / 1000, 0.05);
+    this.lastTime = now;
+    this.update(dt);
+    this.renderer.render(this.scene, this.camera);
+  }
+}

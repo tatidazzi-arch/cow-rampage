@@ -70,13 +70,11 @@ constructor() {}
   private createLoadingScreen(): (pct: number, label: string) => void {
     const el = document.createElement('div');
     el.id = 'loading';
-    el.innerHTML = '<div>Carregando Cow Rampage 3D...</div><div class="bar"><div class="fill" id="loadfill"></div></div><div id="loadlabel" style="font-size:14px;color:#888;margin-top:8px"></div>';
+    el.innerHTML = '<div>Carregando...</div><div class="bar"><div class="fill" id="loadfill"></div></div>';
     document.body.appendChild(el);
-    return (pct, label) => {
+    return (pct) => {
       const fill = document.getElementById('loadfill');
-      const lbl = document.getElementById('loadlabel');
       if (fill) (fill as HTMLElement).style.width = pct + '%';
-      if (lbl) lbl.textContent = label;
     };
   }
 
@@ -180,6 +178,7 @@ constructor() {}
   private setupHUD() {
     const hud = document.createElement('div');
     hud.id = 'hud';
+    hud.style.display = 'none';
     hud.innerHTML = `
       <div>Score: <span id="score">0</span></div>
       <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
@@ -189,6 +188,7 @@ constructor() {}
 
     const controls = document.createElement('div');
     controls.id = 'controls';
+    controls.style.display = 'none';
     controls.textContent = 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
     document.body.appendChild(controls);
 
@@ -203,6 +203,7 @@ constructor() {}
 
     const mission = document.createElement('div');
     mission.id = 'mission';
+    mission.style.display = 'none';
     document.body.appendChild(mission);
 
     this.missions.onComplete = (done, next) => {
@@ -218,20 +219,29 @@ constructor() {}
     const start = document.createElement('div');
     start.id = 'start';
     start.innerHTML = `
-      <h1>COW RAMPAGE 3D</h1>
-      <h2>Goat Simulator Edition</h2>
-      <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
-      <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
-      <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
-      <input id="pwInput" type="password" placeholder="Senha" autocomplete="off" />
-      <div id="pwError"></div>
-      <button id="playBtn">CLIQUE PARA JOGAR</button>
+      <div id="lockscreen">
+        <p>Digite a senha para continuar</p>
+        <input id="pwInput" type="password" placeholder="Senha" autocomplete="off" />
+        <div id="pwError"></div>
+        <button id="unlockBtn">ENTRAR</button>
+      </div>
+      <div id="gamemenu" style="display:none">
+        <h1>COW RAMPAGE 3D</h1>
+        <h2>Goat Simulator Edition</h2>
+        <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
+        <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
+        <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
+        <button id="playBtn">CLIQUE PARA JOGAR</button>
+      </div>
     `;
     document.body.appendChild(start);
-    start.addEventListener('click', () => this.startGame());
-    document.getElementById('playBtn')!.addEventListener('click', (e) => {
+    document.getElementById('unlockBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.startGame();
+    });
+    document.getElementById('playBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.beginPlay();
     });
     const pwInput = document.getElementById('pwInput')!;
     pwInput.addEventListener('click', (e) => e.stopPropagation());
@@ -248,8 +258,18 @@ constructor() {}
       if (err) err.textContent = 'Senha incorreta!';
       return;
     }
+    document.title = 'Cow Rampage 3D';
+    (document.getElementById('pwInput') as HTMLInputElement | null)?.blur();
+    document.getElementById('lockscreen')!.style.display = 'none';
+    document.getElementById('gamemenu')!.style.display = 'flex';
+  }
+
+  private beginPlay() {
     const start = document.getElementById('start');
     if (start) start.style.display = 'none';
+    document.getElementById('hud')!.style.display = 'block';
+    document.getElementById('controls')!.style.display = 'block';
+    document.getElementById('mission')!.style.display = 'block';
     this.started = true;
     this.input.requestLock();
     this.showMessage('BOA SORTE!');

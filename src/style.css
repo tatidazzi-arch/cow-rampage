@@ -53,6 +53,9 @@ canvas { display: block; }
 #start .k { display: inline-block; background: #333; border: 1px solid #666; border-radius: 4px; padding: 2px 8px; margin: 2px; font-size: 14px; }
 #playBtn { margin-top: 25px; padding: 15px 60px; font-size: 28px; background: #ffcc00; color: #000; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
 #playBtn:hover { background: #ffdd44; }
+#pwInput { margin-top: 18px; padding: 12px 18px; font-size: 20px; text-align: center; border: 2px solid #666; border-radius: 10px; background: #222; color: #fff; outline: none; font-family: Arial, sans-serif; }
+#pwInput:focus { border-color: #ffcc00; }
+#pwError { color: #ff5555; font-size: 16px; min-height: 22px; margin-top: 6px; font-family: Arial, sans-serif; }
 #exitBtn { margin-top: 15px; padding: 8px 30px; font-size: 18px; background: #c33; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
 
 #loading {

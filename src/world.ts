@@ -121,6 +121,12 @@ export class World {
   /** Vigas animadas das bombas de petróleo */
   pumps: { beam: THREE.Group; phase: number }[] = [];
   private pumpT = 0;
+  /** Animados do mapa-guia: moinho, carros, fumaça, fogueira */
+  windmillBlades: THREE.Group | null = null;
+  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number }[] = [];
+  smoke: { mesh: THREE.Mesh; speed: number; maxY: number }[] = [];
+  fireLight: THREE.PointLight | null = null;
+  private animT = 0;
   /** Template da Gleditsia (clone por árvore) + métricas em espaço unitário */
   readonly treeInfo: { loaded: boolean; meshes: number; mats: string[]; parseMs: number; verts: number; tTraverseMs: number; tMetricsMs: number } = { loaded: false, meshes: 0, mats: [], parseMs: 0, verts: 0, tTraverseMs: 0, tMetricsMs: 0 };
   /** Grama bermuda espalhada (instanced) */
@@ -1010,6 +1016,74 @@ const towerBox = new THREE.Box3();
     this.buildGoatCity();
     this.buildMine();
     this.buildSigns();
+    this.buildTraffic();
+    this.buildCampfire();
+  }
+
+  /** Fogueira na clareira da floresta (com luz tremeluzente). */
+  private buildCampfire() {
+    const cx = FOREST.x + 10, cz = FOREST.z + 15;
+    const gy = this.groundHeight(cx, cz);
+    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x6a6a6a });
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const st = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.5), stoneMat);
+      st.position.set(cx + Math.cos(a) * 1.4, gy + 0.2, cz + Math.sin(a) * 1.4);
+      this.scene.add(st);
+    }
+    const logMat = new THREE.MeshLambertMaterial({ color: 0x4a2f1a });
+    for (const a of [0.3, 2.4, 4.4]) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 2, 6), logMat);
+      log.rotation.z = Math.PI / 2;
+      log.rotation.y = a;
+      log.position.set(cx, gy + 0.3, cz);
+      this.scene.add(log);
+    }
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xf97316 }));
+    flame.position.set(cx, gy + 1.1, cz);
+    this.scene.add(flame);
+    const ember = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.0, 6),
+      new THREE.MeshBasicMaterial({ color: 0xfde047 }));
+    ember.position.set(cx, gy + 1.0, cz);
+    this.scene.add(ember);
+    this.fireLight = new THREE.PointLight(0xff8030, 60, 30);
+    this.fireLight.position.set(cx, gy + 2, cz);
+    this.scene.add(this.fireLight);
+    this.logProp('campfire', cx, cz);
+  }
+
+  /** Carros fantasma nas avenidas (sem colisão, só visual). */
+  private buildTraffic() {
+    const carColors = [0xef4444, 0x3b82f6, 0xf59e0b, 0x10b981, 0xffffff];
+    const mkCar = (color: number): THREE.Group => {
+      const car = new THREE.Group();
+      const bodyM = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 3.2),
+        new THREE.MeshLambertMaterial({ color }));
+      bodyM.position.y = 0.6;
+      bodyM.castShadow = true;
+      car.add(bodyM);
+      const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.6),
+        new THREE.MeshLambertMaterial({ color: 0x111827 }));
+      cabin.position.set(0, 1.2, -0.2);
+      car.add(cabin);
+      return car;
+    };
+    for (let i = 0; i < 5; i++) {
+      const car = mkCar(carColors[i % carColors.length]);
+      car.position.set(i % 2 === 0 ? -1.5 : 1.5, 0.1, -1000 + i * 420);
+      if (i % 2 === 1) car.rotation.y = Math.PI;
+      this.scene.add(car);
+      this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1060, max: 1130 });
+    }
+    for (let i = 0; i < 5; i++) {
+      const car = mkCar(carColors[(i + 2) % carColors.length]);
+      car.rotation.y = Math.PI / 2;
+      car.position.set(-1300 + i * 520, 0.1, i % 2 === 0 ? -1.5 : 1.5);
+      this.scene.add(car);
+      this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1380, max: 1130 });
+    }
+    this.logProp('traffic', 0, 0);
   }
 
   /** Dizima geometria mantendo 1 a cada `factor` triângulos (grupos preservados). */
@@ -1267,6 +1341,34 @@ const towerBox = new THREE.Box3();
       placed++;
     }
     this.logProp('hayfield', 0, -1850);
+    // moinho de vento com pás animadas
+    {
+      const mx = 60, mz = -1820;
+      const mgy = this.groundHeight(mx, mz);
+      const whiteMat = new THREE.MeshLambertMaterial({ color: 0xf1f5f9 });
+      const millBase = new THREE.Mesh(new THREE.CylinderGeometry(2, 3.5, 11, 8), whiteMat);
+      millBase.position.set(mx, mgy + 5.5, mz);
+      millBase.castShadow = true;
+      this.scene.add(millBase);
+      const millRoof = new THREE.Mesh(new THREE.ConeGeometry(2.6, 3, 8),
+        new THREE.MeshLambertMaterial({ color: 0x7c2d12 }));
+      millRoof.position.set(mx, mgy + 12.5, mz);
+      this.scene.add(millRoof);
+      const blades = new THREE.Group();
+      blades.position.set(mx, mgy + 10.5, mz + 2.2);
+      const bladeMat = new THREE.MeshLambertMaterial({ color: 0xe2e8f0 });
+      for (let i = 0; i < 4; i++) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.8, 8, 0.1), bladeMat);
+        blade.rotation.z = (Math.PI / 2) * i;
+        blades.add(blade);
+      }
+      this.scene.add(blades);
+      this.windmillBlades = blades;
+      const mb = this.fixedBody(mx, mz);
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cylinder(5.5, 3).setTranslation(0, mgy + 5.5, 0), mb);
+      this.logProp('windmill', mx, mz);
+    }
   }
 
   /** Ponte da barragem: liga a ilha redonda a principal (piso no nivel da rua). */
@@ -1340,6 +1442,7 @@ const towerBox = new THREE.Box3();
       const rr = 5 + Math.sqrt(Math.random()) * (r - 6);
       const sx = cx + Math.cos(th) * rr;
       const sz = cz + Math.sin(th) * rr;
+      if (Math.hypot(sx - (cx + 10), sz - (cz + 10)) < 7) continue; // fora do mausoléu
       const sgy = this.groundHeight(sx, sz);
       const stone = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.25), stoneMat);
       stone.position.set(sx, sgy + 0.65, sz);
@@ -1375,6 +1478,27 @@ const towerBox = new THREE.Box3();
       const tb = this.fixedBody(cx + ox, cz + oz);
       this.world.createCollider(
         RAPIER.ColliderDesc.capsule(2.2, 0.3).setTranslation(0, tgy + 2.5, 0), tb);
+    }
+    // mausoléu gótico
+    {
+      const mx = cx + 10, mz = cz + 10;
+      const mgy = this.groundHeight(mx, mz);
+      const maus = new THREE.Mesh(new THREE.BoxGeometry(7, 6, 7), stoneMat);
+      maus.position.set(mx, mgy + 3, mz);
+      maus.castShadow = true; maus.receiveShadow = true;
+      this.scene.add(maus);
+      const mroof = new THREE.Mesh(new THREE.ConeGeometry(5.5, 3.5, 4), darkMat);
+      mroof.position.set(mx, mgy + 7.5, mz);
+      mroof.rotation.y = Math.PI / 4;
+      mroof.castShadow = true;
+      this.scene.add(mroof);
+      const mdoor = new THREE.Mesh(new THREE.BoxGeometry(2, 3.5, 0.2),
+        new THREE.MeshLambertMaterial({ color: 0x0a0a0a }));
+      mdoor.position.set(mx, mgy + 1.75, mz + 3.55);
+      this.scene.add(mdoor);
+      const mb = this.fixedBody(mx, mz);
+      this.solidBox(mb, 0, mgy + 3, 0, 3.5, 3, 3.5);
+      this.logProp('mausoleum', mx, mz);
     }
     this.logProp('cemetery', cx, cz);
   }
@@ -1489,6 +1613,31 @@ const towerBox = new THREE.Box3();
       new THREE.MeshLambertMaterial({ color: 0xaa2222 }));
     carpet.position.set(cx, gy + 0.14, cz + 32);
     this.scene.add(carpet);
+    // piscina + heliponto
+    const poolBase = new THREE.Mesh(new THREE.BoxGeometry(14, 0.8, 8),
+      new THREE.MeshLambertMaterial({ color: 0xe2e8f0 }));
+    poolBase.position.set(cx + 35, gy + 0.4, cz + 10);
+    this.scene.add(poolBase);
+    const poolWater = new THREE.Mesh(new THREE.PlaneGeometry(12, 6),
+      new THREE.MeshLambertMaterial({ color: 0x06b6d4 }));
+    poolWater.rotation.x = -Math.PI / 2;
+    poolWater.position.set(cx + 35, gy + 0.85, cz + 10);
+    this.scene.add(poolWater);
+    this.logProp('pool', cx + 35, cz + 10);
+    const heli = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 0.3, 16),
+      new THREE.MeshLambertMaterial({ color: 0x334155 }));
+    heli.position.set(cx - 45, gy + 0.15, cz + 30);
+    heli.receiveShadow = true;
+    this.scene.add(heli);
+    const hBar1 = new THREE.Mesh(new THREE.BoxGeometry(4, 0.05, 1),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    hBar1.position.set(cx - 45, gy + 0.32, cz + 30);
+    this.scene.add(hBar1);
+    const hBar2 = new THREE.Mesh(new THREE.BoxGeometry(1, 0.05, 4),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    hBar2.position.set(cx - 45, gy + 0.32, cz + 30);
+    this.scene.add(hBar2);
+    this.logProp('helipad', cx - 45, cz + 30);
     this.logProp('mansion', cx, cz);
   }
 
@@ -1555,7 +1704,55 @@ const { x: cx, z: cz } = MINE;
     core.rotation.x = -Math.PI / 2;
     core.position.set(cx, 0, cz);
     this.scene.add(core);
+    const ventH = this.groundHeight(cx, cz);
+    const lavaLight = new THREE.PointLight(0xff4500, 4000, 120);
+    lavaLight.position.set(cx, ventH + 8, cz);
+    this.scene.add(lavaLight);
     this.logProp('lava', cx, cz);
+    // fumaça subindo do vulcão
+    {
+      const smokeMat = new THREE.MeshLambertMaterial({ color: 0x555555, transparent: true, opacity: 0.55 });
+      for (let i = 0; i < 12; i++) {
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 2, 7, 6), smokeMat);
+        const py = ventH + 4 + Math.random() * 22;
+        puff.position.set(cx + (Math.random() - 0.5) * 8, py, cz + (Math.random() - 0.5) * 8);
+        this.scene.add(puff);
+        this.smoke.push({ mesh: puff, speed: 3 + Math.random() * 3, maxY: ventH + 28 });
+      }
+    }
+    // torres de perfuração
+    {
+      const beamMat = new THREE.MeshLambertMaterial({ color: 0x451a03 });
+      const mkDerrick = (dx: number, dz: number, h: number) => {
+        const dgy = this.groundHeight(cx + dx, cz + dz);
+        const dg = new THREE.Group();
+        for (let k = 0; k < 4; k++) {
+          const a = (Math.PI / 2) * k;
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, h, 4), beamMat);
+          post.position.set(Math.cos(a) * 5, h / 2, Math.sin(a) * 5);
+          post.rotation.z = Math.cos(a) * 0.12;
+          post.rotation.x = Math.sin(a) * 0.12;
+          post.castShadow = true;
+          dg.add(post);
+        }
+        for (let b = 1; b < 4; b++) {
+          const ring = new THREE.Mesh(new THREE.BoxGeometry(10.5 - b * 2, 0.8, 10.5 - b * 2), beamMat);
+          ring.position.y = (h / 4) * b;
+          dg.add(ring);
+        }
+        const pulley = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 1, 8), beamMat);
+        pulley.rotation.z = Math.PI / 2;
+        pulley.position.y = h + 1;
+        dg.add(pulley);
+        dg.position.set(cx + dx, dgy, cz + dz);
+        this.scene.add(dg);
+        const db = this.fixedBody(cx + dx, cz + dz);
+        this.solidBox(db, 0, dgy + h / 2, 0, 5, h / 2, 5);
+      };
+      mkDerrick(-90, -40, 30);
+      mkDerrick(-60, 60, 25);
+      this.logProp('derrick', cx - 90, cz - 40);
+    }
     // máquinas de extrair petróleo (vigas animadas no updatePumps)
     const pumpBaseMat = new THREE.MeshLambertMaterial({ color: 0x8a2f23 });
     const pumpDarkMat = new THREE.MeshLambertMaterial({ color: 0x2e2e2e });
@@ -1633,11 +1830,32 @@ const { x: cx, z: cz } = MINE;
     this.logProp('mine', cx, cz);
   }
 
-  /** Anima as vigas das bombas de petróleo. Chamado todo frame. */
-  updatePumps(dt: number): void {
+  /** Anima bombas, moinho, carros, fumaça e fogueira. Chamado todo frame. */
+  updateAnims(dt: number): void {
     this.pumpT += dt;
     for (const p of this.pumps) {
       p.beam.rotation.z = Math.sin(this.pumpT * 2 + p.phase) * 0.35;
+    }
+    this.animT += dt;
+    if (this.windmillBlades) this.windmillBlades.rotation.z += dt * 1.8;
+    for (const c of this.cars) {
+      if (c.axis === 'z') {
+        c.mesh.position.z += c.speed * c.dir * dt;
+        if (c.mesh.position.z > c.max) c.mesh.position.z = c.min;
+        if (c.mesh.position.z < c.min) c.mesh.position.z = c.max;
+      } else {
+        c.mesh.position.x += c.speed * c.dir * dt;
+        if (c.mesh.position.x > c.max) c.mesh.position.x = c.min;
+        if (c.mesh.position.x < c.min) c.mesh.position.x = c.max;
+      }
+    }
+    for (const s of this.smoke) {
+      s.mesh.position.y += s.speed * dt;
+      s.mesh.rotation.y += dt * 0.4;
+      if (s.mesh.position.y > s.maxY) s.mesh.position.y -= 22;
+    }
+    if (this.fireLight) {
+      this.fireLight.intensity = 1.1 + Math.sin(this.animT * 9) * 0.35;
     }
   }
 

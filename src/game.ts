@@ -223,6 +223,8 @@ constructor() {}
       <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
       <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
       <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
+      <input id="pwInput" type="password" placeholder="Senha" autocomplete="off" />
+      <div id="pwError"></div>
       <button id="playBtn">CLIQUE PARA JOGAR</button>
     `;
     document.body.appendChild(start);
@@ -231,9 +233,21 @@ constructor() {}
       e.stopPropagation();
       this.startGame();
     });
+    const pwInput = document.getElementById('pwInput')!;
+    pwInput.addEventListener('click', (e) => e.stopPropagation());
+    pwInput.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if ((e as KeyboardEvent).key === 'Enter') this.startGame();
+    });
   }
 
   private startGame() {
+    const pw = (document.getElementById('pwInput') as HTMLInputElement | null)?.value ?? '';
+    if (pw !== 'cowcow') {
+      const err = document.getElementById('pwError');
+      if (err) err.textContent = 'Senha incorreta!';
+      return;
+    }
     const start = document.getElementById('start');
     if (start) start.style.display = 'none';
     this.started = true;
@@ -785,7 +799,7 @@ constructor() {}
     this.updateCow(dt);
     this.updateNPCs(dt);
     this.updateBullets();
-    this.world.updatePumps(dt);
+    this.world.updateAnims(dt);
     this.missions.update(dt, {
       carrying: this.carrying ? {
         isSweater: isSweater(this.carrying),

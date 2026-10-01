@@ -6,6 +6,8 @@ import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
 import { MissionManager } from './missions';
+import { NetManager, RemoteCow } from './net';
+import type { CowNetState } from './net';
 
 export class Game {
   private scene!: THREE.Scene;
@@ -18,6 +20,10 @@ export class Game {
   private cow!: Cow;
   private npcFactory!: NPCFactory;
   private npcs: NPCPhysics[] = [];
+  private net = new NetManager();
+  private remoteCows = new Map<string, RemoteCow>();
+  private netActive = false;
+  private netAcc = 0;
 
   private score = 0;
   private chaos = 0;
@@ -206,6 +212,18 @@ constructor() {}
     mission.style.display = 'none';
     document.body.appendChild(mission);
 
+    const scores = document.createElement('div');
+    scores.id = 'scores';
+    scores.style.display = 'none';
+    document.body.appendChild(scores);
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.id = 'leaveBtn';
+    leaveBtn.textContent = 'sair da sala';
+    leaveBtn.style.display = 'none';
+    document.body.appendChild(leaveBtn);
+    leaveBtn.addEventListener('click', () => this.leaveNet());
+
     this.missions.onComplete = (done, next) => {
       this.score += done.reward;
       this.chaos = Math.min(100, this.chaos + 10);
@@ -231,7 +249,19 @@ constructor() {}
         <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
         <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
         <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
-        <button id="playBtn">CLIQUE PARA JOGAR</button>
+        <button id="playBtn">1 JOGADOR</button>
+        <button id="netBtn">MULTIPLAYER</button>
+      </div>
+      <div id="netmenu" style="display:none">
+        <h1>MULTIPLAYER</h1>
+        <p>Mesma sala = mesmo caos. Sem conta!</p>
+        <input id="netName" placeholder="Seu nome" autocomplete="off" />
+        <input id="netRoom" placeholder="Código da sala" autocomplete="off" />
+        <div id="netError"></div>
+        <button id="netJoin">ENTRAR NA SALA</button>
+        <div id="netplayerlist"></div>
+        <button id="netPlay" style="display:none">JOGAR ONLINE</button>
+        <button id="netBack">VOLTAR</button>
       </div>
     `;
     document.body.appendChild(start);
@@ -241,8 +271,32 @@ constructor() {}
     });
     document.getElementById('playBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.beginPlay();
+      this.beginPlay(false);
     });
+    document.getElementById('netBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openNetMenu();
+    });
+    document.getElementById('netBack')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeNetMenu();
+    });
+    document.getElementById('netJoin')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.joinNetRoom();
+    });
+    document.getElementById('netPlay')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.beginPlay(true);
+    });
+    for (const id of ['netName', 'netRoom']) {
+      const el = document.getElementById(id)!;
+      el.addEventListener('click', (e) => e.stopPropagation());
+      el.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if ((e as KeyboardEvent).key === 'Enter') this.joinNetRoom();
+      });
+    }
     const pwInput = document.getElementById('pwInput')!;
     pwInput.addEventListener('click', (e) => e.stopPropagation());
     pwInput.addEventListener('keydown', (e) => {
@@ -264,15 +318,99 @@ constructor() {}
     document.getElementById('gamemenu')!.style.display = 'flex';
   }
 
-  private beginPlay() {
+  private openNetMenu() {
+    document.getElementById('gamemenu')!.style.display = 'none';
+    document.getElementById('netmenu')!.style.display = 'flex';
+    const nameEl = document.getElementById('netName') as HTMLInputElement;
+    if (!nameEl.value) nameEl.value = 'Vaca-' + Math.floor(1000 + Math.random() * 9000);
+    const palette = [0xff5555, 0x55aaff, 0x55dd55, 0xffcc00, 0xcc66ff, 0xff8800];
+    this.net.myColor = palette[Math.floor(Math.random() * palette.length)];
+    this.renderNetList();
+  }
+
+  private closeNetMenu() {
+    document.getElementById('netmenu')!.style.display = 'none';
+    document.getElementById('gamemenu')!.style.display = 'flex';
+  }
+
+  private joinNetRoom() {
+    const name = (document.getElementById('netName') as HTMLInputElement).value;
+    const code = (document.getElementById('netRoom') as HTMLInputElement).value;
+    const err = document.getElementById('netError')!;
+    if (!code.trim()) {
+      err.textContent = 'Digite o código da sala!';
+      return;
+    }
+    try {
+      this.net.join(code, name || 'Jimmy', this.net.myColor);
+      document.getElementById('netPlay')!.style.display = 'block';
+      err.textContent = 'Sala: ' + this.net.roomCode + ' — chame os amigos!';
+      this.renderNetList();
+    } catch {
+      err.textContent = 'Falha ao entrar. Tente de novo.';
+    }
+  }
+
+  private renderNetList() {
+    const el = document.getElementById('netplayerlist');
+    if (!el) return;
+    const list = this.net.scoreboard(this.score);
+    el.innerHTML = list.map((p) =>
+      `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
+    ).join('') || '<div>Aguardando jogadores...</div>';
+  }
+
+  private beginPlay(multiplayer: boolean) {
     const start = document.getElementById('start');
     if (start) start.style.display = 'none';
     document.getElementById('hud')!.style.display = 'block';
     document.getElementById('controls')!.style.display = 'block';
     document.getElementById('mission')!.style.display = 'block';
     this.started = true;
+    this.netActive = multiplayer && this.net.connected;
+    if (this.netActive) {
+      document.getElementById('leaveBtn')!.style.display = 'block';
+      this.net.onCowState((s: CowNetState, peerId: string) => {
+        let rc = this.remoteCows.get(peerId);
+        if (!rc) {
+          const prof = this.net.profileOf(peerId);
+          rc = new RemoteCow(this.scene, prof ? prof.name : '?', prof ? prof.color : 0xffffff);
+          rc.group.position.set(s.x, s.y - 1.1, s.z);
+          rc.target.set(s.x, s.y - 1.1, s.z);
+          this.remoteCows.set(peerId, rc);
+          this.showMessage((prof ? prof.name : 'Alguém') + ' entrou! 🐄');
+        }
+        rc.setState(s);
+        this.net.updateScore(peerId, s.score);
+      });
+      this.net.onRemoteLeave = (peerId: string) => {
+        const rc = this.remoteCows.get(peerId);
+        if (rc) {
+          rc.dispose(this.scene);
+          this.remoteCows.delete(peerId);
+          this.showMessage('Jogador saiu 👋');
+        }
+      };
+      this.net.onPeers = () => this.renderNetList();
+      this.net.onEvent = (e, fromName) => {
+        if (e.type === 'boom') {
+          this.spawnParticles(e.x, e.y, e.z, 12, 0xff6600);
+          this.showMessage(fromName + ': ' + e.text);
+        }
+      };
+    }
     this.input.requestLock();
     this.showMessage('BOA SORTE!');
+  }
+
+  private leaveNet() {
+    void this.net.leave();
+    for (const rc of this.remoteCows.values()) rc.dispose(this.scene);
+    this.remoteCows.clear();
+    this.netActive = false;
+    document.getElementById('leaveBtn')!.style.display = 'none';
+    document.getElementById('scores')!.style.display = 'none';
+    this.showMessage('Saiu da sala.');
   }
 
   private showMessage(text: string) {
@@ -310,6 +448,18 @@ constructor() {}
 
     const hint = document.getElementById('mousehint');
     if (hint) hint.style.display = (this.started && !this.input.mouseLocked) ? 'block' : 'none';
+
+    const sb = document.getElementById('scores');
+    if (sb) {
+      if (this.netActive) {
+        sb.style.display = 'block';
+        sb.innerHTML = '<b>🏆 Sala ' + this.net.roomCode + '</b><br>' + this.net.scoreboard(this.score)
+          .map((p) => `<span style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}: ${p.score}</span>`)
+          .join('<br>');
+      } else {
+        sb.style.display = 'none';
+      }
+    }
 
     const mp = document.getElementById('mission');
     if (mp) {
@@ -387,6 +537,10 @@ constructor() {}
         npc.body.setAngvel({ x: 2, y: 0, z: 0 }, true);
         loadedCannon.loadedNPC = null;
         this.missions.event('fire');
+        if (this.netActive) {
+          const nt = npc.body.translation();
+          this.net.sendBoom('BOOOM!', nt.x, nt.y, nt.z);
+        }
         this.score += 15;
         this.chaos = Math.min(100, this.chaos + 25);
         this.showMessage('BOOOM!');
@@ -454,6 +608,7 @@ constructor() {}
         this.chaos = Math.min(100, this.chaos + 5);
         this.missions.event('headbutt');
         this.missions.event('knock');
+        if (this.netActive) this.net.sendBoom('CABECADA!', t.x, t.y + 1, t.z);
         this.showMessage('CABECADA!');
         this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
       }
@@ -820,6 +975,26 @@ constructor() {}
     this.updateNPCs(dt);
     this.updateBullets();
     this.world.updateAnims(dt);
+    if (this.netActive && this.net.connected) {
+      this.netAcc += dt;
+      if (this.netAcc >= 1 / 15) {
+        this.netAcc = 0;
+        const t = this.cow.body.translation();
+        const v = this.cow.body.linvel();
+        this.net.sendState({
+          x: t.x, y: t.y, z: t.z, yaw: this.cow.yaw,
+          speed: Math.hypot(v.x, v.z),
+          air: !this.cow.grounded, carry: this.carrying !== null,
+          score: this.score,
+        });
+      }
+      for (const rc of this.remoteCows.values()) {
+        const d = Math.hypot(rc.target.x - rc.group.position.x, rc.target.z - rc.group.position.z);
+        rc.update(dt, d > 0.5 ? 5 : 0);
+      }
+    } else if (this.netActive) {
+      this.netActive = false;
+    }
     this.missions.update(dt, {
       carrying: this.carrying ? {
         isSweater: isSweater(this.carrying),

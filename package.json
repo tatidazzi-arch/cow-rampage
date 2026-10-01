@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",
+    "@trystero-p2p/torrent": "^0.25.4",
     "@types/three": "^0.186.0",
     "fflate": "^0.8.3",
     "three": "^0.186.0"

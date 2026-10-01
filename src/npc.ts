@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { worldRand } from './rng';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon';
@@ -44,12 +45,12 @@ export class NPCFactory {
 
   create(scene: THREE.Scene, world: RAPIER.World, x: number, z: number, forceKind?: 'normal' | 'business' | 'goat'): NPCPhysics {
     const id = this.idCounter++;
-    const shirt = Math.random() < 0.35
-      ? new THREE.Color(SUETER_HEX[Math.floor(Math.random() * SUETER_HEX.length)])
-      : new THREE.Color(SHIRT_COLORS[Math.floor(Math.random() * SHIRT_COLORS.length)]);
-    const skin = new THREE.Color(SKIN_COLORS[Math.floor(Math.random() * SKIN_COLORS.length)]);
-    const hair = new THREE.Color(HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)]);
-    const pants = new THREE.Color(PANT_COLORS[Math.floor(Math.random() * PANT_COLORS.length)]);
+    const shirt = worldRand() < 0.35
+      ? new THREE.Color(SUETER_HEX[Math.floor(worldRand() * SUETER_HEX.length)])
+      : new THREE.Color(SHIRT_COLORS[Math.floor(worldRand() * SHIRT_COLORS.length)]);
+    const skin = new THREE.Color(SKIN_COLORS[Math.floor(worldRand() * SKIN_COLORS.length)]);
+    const hair = new THREE.Color(HAIR_COLORS[Math.floor(worldRand() * HAIR_COLORS.length)]);
+    const pants = new THREE.Color(PANT_COLORS[Math.floor(worldRand() * PANT_COLORS.length)]);
 
     const npcKind = forceKind ?? (id % 4 === 1 ? 'business' : 'normal');
     const mesh = npcKind === 'goat' ? this.buildGoatMesh() : this.buildMesh(shirt, skin, hair, pants);
@@ -85,8 +86,8 @@ export class NPCFactory {
       mesh, body, collider,
       kind: npcKind,
       state: 'walk', stateTimer: 0,
-      walkDir: Math.random() > 0.5 ? 1 : -1,
-      speed: 1.5 + Math.random() * 3,
+      walkDir: worldRand() > 0.5 ? 1 : -1,
+      speed: 1.5 + worldRand() * 3,
       skinSeat: { shirt, skin, hair, pants },
     };
     if (npc.kind === 'business') this.ensureBusiness(npc);

@@ -1,4 +1,5 @@
 * { margin: 0; padding: 0; overflow: hidden; }
+html, body { touch-action: none; overscroll-behavior: none; }
 body { background: #000; }
 canvas { display: block; }
 
@@ -69,8 +70,24 @@ canvas { display: block; }
 #leaveBtn { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); z-index: 10; font-family: Arial, sans-serif; font-size: 13px; padding: 5px 14px; border-radius: 6px; border: 1px solid #666; background: rgba(0,0,0,0.55); color: #ccc; cursor: pointer; }
 #pwInput { margin-top: 18px; padding: 12px 18px; font-size: 20px; text-align: center; border: 2px solid #666; border-radius: 10px; background: #222; color: #fff; outline: none; font-family: Arial, sans-serif; }
 #pwInput:focus { border-color: #ffcc00; }
+#netName, #netRoom { font-size: 18px; }
 #pwError { color: #ff5555; font-size: 16px; min-height: 22px; margin-top: 6px; font-family: Arial, sans-serif; }
 #exitBtn { margin-top: 15px; padding: 8px 30px; font-size: 18px; background: #c33; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+
+/* ===== controles touch (só aparecem em celular/tablet) ===== */
+#touchui { position: fixed; inset: 0; z-index: 15; pointer-events: none; display: none; font-family: Arial, sans-serif; }
+#tjoy { position: fixed; left: 24px; bottom: 24px; width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35); }
+#tknob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(255,204,0,0.75); border: 2px solid rgba(0,0,0,0.4); }
+.tbtn { position: fixed; pointer-events: auto; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; border: 2px solid rgba(255,255,255,0.5); font-weight: bold; font-size: 13px; text-align: center; user-select: none; -webkit-user-select: none; }
+.tbtn.on { background: rgba(255,204,0,0.8); color: #000; border-color: #000; }
+.tjump { right: 24px; bottom: 24px; width: 88px; height: 88px; font-size: 15px; background: rgba(255,204,0,0.55); color: #000; }
+.tgrab { right: 124px; bottom: 44px; width: 66px; height: 66px; }
+.tdrop { right: 44px; bottom: 124px; width: 66px; height: 66px; }
+.thead { right: 124px; bottom: 124px; width: 66px; height: 66px; font-size: 11px; }
+.tflip { right: 204px; bottom: 44px; width: 66px; height: 66px; font-size: 12px; }
+.trun { left: 24px; bottom: 160px; width: 66px; height: 66px; font-size: 12px; }
+.tzin { right: 12px; top: 120px; width: 44px; height: 44px; font-size: 20px; }
+.tzout { right: 12px; top: 172px; width: 44px; height: 44px; font-size: 20px; }
 
 #loading {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 30;

@@ -8,6 +8,8 @@ import type { NPCPhysics } from './npc';
 import { MissionManager } from './missions';
 import { NetManager, RemoteCow } from './net';
 import type { CowNetState } from './net';
+import { worldRand } from './rng';
+import { isTouchDevice, setupTouchControls } from './touch';
 
 export class Game {
   private scene!: THREE.Scene;
@@ -91,7 +93,8 @@ constructor() {}
 
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 6000);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice() });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isTouchDevice() ? 1.5 : 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -121,6 +124,7 @@ constructor() {}
 
   private setupInput() {
     this.input = new Input(this.renderer.domElement);
+    setupTouchControls(this.input, () => this.started);
     this.input.onLockError = () => {
       this.showMessage('Mouse recusado: clique de novo ou arraste pra olhar');
     };
@@ -153,8 +157,8 @@ constructor() {}
     for (let i = 0; i < 60; i++) {
       let x = 20, z = 20;
       for (let a = 0; a < 40; a++) {
-        const th = Math.random() * Math.PI * 2;
-        const rr = Math.sqrt(Math.random()) * (islandRadius(th, true) - 14);
+        const th = worldRand() * Math.PI * 2;
+        const rr = Math.sqrt(worldRand()) * (islandRadius(th, true) - 14);
         const px = Math.cos(th) * rr;
         const pz = Math.sin(th) * rr;
         if (Math.hypot(px, pz - 8) < 15) continue;
@@ -165,16 +169,16 @@ constructor() {}
     // bodes da cidade das cabras
     await this.world.buildForestPatch(-800, 200, 150, 150);
     for (let i = 0; i < 10; i++) {
-      const th = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * 30;
+      const th = worldRand() * Math.PI * 2;
+      const rr = Math.sqrt(worldRand()) * 30;
       const gx = -750 + Math.cos(th) * rr;
       const gz = 850 + Math.sin(th) * rr;
       this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz, 'goat'));
     }
     // trabalhadores da fazenda (ilha redonda)
     for (let i = 0; i < 8; i++) {
-      const th = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * 60;
+      const th = worldRand() * Math.PI * 2;
+      const rr = Math.sqrt(worldRand()) * 60;
       this.npcs.push(this.npcFactory.create(
         this.scene, this.physics, BALL.x + Math.cos(th) * rr, BALL.z + Math.sin(th) * rr));
     }
@@ -195,7 +199,9 @@ constructor() {}
     const controls = document.createElement('div');
     controls.id = 'controls';
     controls.style.display = 'none';
-    controls.textContent = 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
+    controls.textContent = isTouchDevice()
+      ? 'Joystick: mover | Arrastar na tela: câmera | Botões: ações'
+      : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
     document.body.appendChild(controls);
 
     const msg = document.createElement('div');
@@ -255,6 +261,7 @@ constructor() {}
       <div id="netmenu" style="display:none">
         <h1>MULTIPLAYER</h1>
         <p>Mesma sala = mesmo caos. Sem conta!</p>
+        <p>Os dois entram com o MESMO código e clicam JOGAR ONLINE.</p>
         <input id="netName" placeholder="Seu nome" autocomplete="off" />
         <input id="netRoom" placeholder="Código da sala" autocomplete="off" />
         <div id="netError"></div>
@@ -447,13 +454,17 @@ constructor() {}
     document.getElementById('carry-status')!.textContent = status;
 
     const hint = document.getElementById('mousehint');
-    if (hint) hint.style.display = (this.started && !this.input.mouseLocked) ? 'block' : 'none';
+    if (hint) hint.style.display = (this.started && !this.input.mouseLocked && !this.input.isTouch) ? 'block' : 'none';
+
+    const touchui = document.getElementById('touchui');
+    if (touchui) touchui.style.display = (this.started && this.input.isTouch) ? 'block' : 'none';
 
     const sb = document.getElementById('scores');
     if (sb) {
       if (this.netActive) {
         sb.style.display = 'block';
-        sb.innerHTML = '<b>🏆 Sala ' + this.net.roomCode + '</b><br>' + this.net.scoreboard(this.score)
+        const board = this.net.scoreboard(this.score);
+        sb.innerHTML = '<b>🏆 Sala ' + this.net.roomCode + ' 🌐' + board.length + '</b><br>' + board
           .map((p) => `<span style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}: ${p.score}</span>`)
           .join('<br>');
       } else {
@@ -626,6 +637,10 @@ constructor() {}
     if (this.input.isDown('KeyS', 'ArrowDown')) move.sub(fwd);
     if (this.input.isDown('KeyA', 'ArrowLeft')) move.add(rgt);
     if (this.input.isDown('KeyD', 'ArrowRight')) move.sub(rgt);
+    // joystick virtual (analógico)
+    if (this.input.joyF !== 0 || this.input.joyS !== 0) {
+      move.addScaledVector(fwd, this.input.joyF).addScaledVector(rgt, -this.input.joyS);
+    }
 
     const body = this.cow.body;
     const currentVel = body.linvel();
@@ -634,7 +649,9 @@ constructor() {}
     if (!this.wallRunning) {
       const inWater = !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2);
       if (move.length() > 0) {
-        move.normalize().multiplyScalar(speed * (inWater ? 0.45 : 1));
+        // normaliza só se passar de 1 (preserva a força do joystick analógico)
+        if (move.length() > 1) move.normalize();
+        move.multiplyScalar(speed * (inWater ? 0.45 : 1));
         // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
         body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
         this.cow.yaw = Math.atan2(move.x, move.z);
@@ -947,8 +964,8 @@ constructor() {}
     if (steps === 5) this.physAcc = 0;
 
     const md = this.input.takeMouseDelta();
-    // com pointer lock OU arrastando o mouse (fallback se o lock falhar)
-    if (this.input.mouseLocked || this.input.mouseDown) {
+    // com pointer lock OU arrastando (mouse ou dedo na tela)
+    if (this.input.mouseLocked || this.input.mouseDown || this.input.isTouch) {
       this.camYaw += md.x * 0.003;
       this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003));
     }

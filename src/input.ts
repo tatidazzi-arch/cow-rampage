@@ -10,6 +10,11 @@ export class Input {
   wheelDX = 0;
   mouseDown = false;
   onLockError: (() => void) | null = null;
+  /** true em celular/tablet (controles touch ativos) */
+  isTouch = false;
+  /** joystick virtual: -1..1 (frente / direita) */
+  joyF = 0;
+  joyS = 0;
 
   private el: HTMLElement;
   private lockRetryAt = 0;
@@ -47,7 +52,7 @@ export class Input {
   }
 
   requestLock() {
-    if (this.mouseLocked) return;
+    if (this.mouseLocked || this.isTouch) return;
     // respeita o cooldown do navegador (ex.: logo apos sair com Esc)
     const now = performance.now();
     if (now < this.lockRetryAt) return;

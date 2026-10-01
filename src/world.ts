@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { worldRand } from './rng';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -395,13 +396,13 @@ private buildRoads() {
         const r = islandRadius(th, true) - 50;
         const x = Math.cos(th) * r;
         const z = Math.sin(th) * r;
-        const w = 20 + Math.random() * 12;
-        const h = 20 + Math.random() * 20;
-        const d = 16 + Math.random() * 10;
+        const w = 20 + worldRand() * 12;
+        const h = 20 + worldRand() * 20;
+        const d = 16 + worldRand() * 10;
         const gy = this.groundHeight(x, z);
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), rockMat);
         mesh.position.set(x, gy + h / 2 - 2, z);
-        mesh.rotation.y = (Math.random() - 0.5) * 0.3;
+        mesh.rotation.y = (worldRand() - 0.5) * 0.3;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         this.scene.add(mesh);
@@ -556,8 +557,8 @@ const towerBox = new THREE.Box3();
     const step = 200;
     for (let gx = CITY.x - CITY.r; gx <= CITY.x + CITY.r && built < count; gx += step) {
       for (let gz = CITY.z - CITY.r; gz <= CITY.z + CITY.r && built < count; gz += step) {
-        const bx = gx + (Math.random() - 0.5) * 60;
-        const bz = gz + (Math.random() - 0.5) * 60;
+        const bx = gx + (worldRand() - 0.5) * 60;
+        const bz = gz + (worldRand() - 0.5) * 60;
         if (this.tryBuildingSpot(bx, bz, count)) built++;
       }
     }
@@ -565,8 +566,8 @@ const towerBox = new THREE.Box3();
     let attempts = 0;
     while (built < count && attempts < count * 40) {
       attempts++;
-      const tha = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * CITY.r;
+      const tha = worldRand() * Math.PI * 2;
+      const rr = Math.sqrt(worldRand()) * CITY.r;
       const bx = CITY.x + Math.cos(tha) * rr;
       const bz = CITY.z + Math.sin(tha) * rr;
       if (this.tryBuildingSpot(bx, bz, count)) built++;
@@ -575,13 +576,13 @@ const towerBox = new THREE.Box3();
 
   /** Prédio de modelo: escala pra altura sorteada, collider box na medida. */
   private tryModelBuilding(bx: number, bz: number, target: number): boolean {
-    const tpl = this.buildingTemplates[Math.floor(Math.random() * this.buildingTemplates.length)];
+    const tpl = this.buildingTemplates[Math.floor(worldRand() * this.buildingTemplates.length)];
     if (!tpl || tpl.height <= 0) return false;
-    const bh = (6 + Math.random() * 20) * 20; // torres de 120-520m
+    const bh = (6 + worldRand() * 20) * 20; // torres de 120-520m
     const s = bh / tpl.height;
     let halfW = tpl.halfW * s;
     let halfD = tpl.halfD * s;
-    const rotIdx = Math.floor(Math.random() * 4);
+    const rotIdx = Math.floor(worldRand() * 4);
     if (rotIdx % 2 === 1) { const t = halfW; halfW = halfD; halfD = t; }
     if (Math.abs(bx) < halfW + 5 && bz > -1085 && bz < 1155) return false;
     if (Math.abs(bz) < halfD + 5 && bx > -1405 && bx < 1155) return false;
@@ -623,8 +624,8 @@ const towerBox = new THREE.Box3();
     if (this.buildingTemplates.length > 0) {
       return this.tryModelBuilding(bx, bz, target);
     }
-    const bw = 4 + Math.random() * 8;
-    const bd = 4 + Math.random() * 8;
+    const bw = 4 + worldRand() * 8;
+    const bd = 4 + worldRand() * 8;
     if (Math.abs(bx) < bw / 2 + 5 && bz > -1085 && bz < 1155) return false;
     if (Math.abs(bz) < bd / 2 + 5 && bx > -1405 && bx < 1155) return false;
     // ruas menores da cidade (grade de 100m)
@@ -638,8 +639,8 @@ const towerBox = new THREE.Box3();
       const dz = Math.abs(bz - b.z);
       if (dx < b.halfW + bw / 2 + 4 && dz < b.halfD + bd / 2 + 4) return false;
     }
-    const bh = 6 + Math.random() * 20;
-      const color = bColors[Math.floor(Math.random() * bColors.length)];
+    const bh = 6 + worldRand() * 20;
+      const color = bColors[Math.floor(worldRand() * bColors.length)];
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(bw, bh, bd),
         new THREE.MeshLambertMaterial({ color }),
@@ -651,7 +652,7 @@ const towerBox = new THREE.Box3();
 
       const roof = new THREE.Mesh(
         new THREE.BoxGeometry(bw + 0.5, 0.4, bd + 0.5),
-        new THREE.MeshLambertMaterial({ color: roofColors[Math.floor(Math.random() * roofColors.length)] }),
+        new THREE.MeshLambertMaterial({ color: roofColors[Math.floor(worldRand() * roofColors.length)] }),
       );
       roof.position.set(bx, bh + 0.2, bz);
       roof.castShadow = true;
@@ -693,7 +694,7 @@ const towerBox = new THREE.Box3();
     for (let fy = 2; fy < bh - 1; fy += 4) {
       for (let fx = -bw / 2 + 1; fx < bw / 2; fx += 3.2) {
         for (const fd of [-bd / 2 - 0.01, bd / 2 + 0.01]) {
-          const lit = Math.random() > 0.35;
+          const lit = worldRand() > 0.35;
           const w = new THREE.Mesh(
             new THREE.BoxGeometry(0.8, 1.2, 0.05),
             lit ? winMat1 : winMat2,
@@ -711,8 +712,8 @@ const towerBox = new THREE.Box3();
     let attempts = 0;
     while (built < count && attempts < count * 20) {
       attempts++;
-      const tx = (Math.random() - 0.5) * WORLD_SIZE * 1.9;
-      const tz = (Math.random() - 0.5) * WORLD_SIZE * 1.9;
+      const tx = (worldRand() - 0.5) * WORLD_SIZE * 1.9;
+      const tz = (worldRand() - 0.5) * WORLD_SIZE * 1.9;
 
       // longe de estradas e do centro
       const onNSRoad = Math.abs(tx) < 3.5 && tz > -1085 && tz < 1155;
@@ -735,8 +736,8 @@ const towerBox = new THREE.Box3();
     let attempts = 0;
     while (built < count && attempts < count * 30) {
       attempts++;
-      const th = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * r;
+      const th = worldRand() * Math.PI * 2;
+      const rr = Math.sqrt(worldRand()) * r;
       const tx = cx + Math.cos(th) * rr;
       const tz = cz + Math.sin(th) * rr;
       if (!this.isOnIsland(tx, tz, 3)) continue;
@@ -862,12 +863,12 @@ const towerBox = new THREE.Box3();
   /** Planta um clone do modelo (altura 4.5-8m, giro aleatório). */
   private plantModelTree(tx: number, tz: number): boolean {
     if (!this.treeTemplate) return false;
-    const s = 4.5 + Math.random() * 3.5;
+    const s = 4.5 + worldRand() * 3.5;
     const gy = this.groundHeight(tx, tz);
     const g = new THREE.Group();
     g.add(this.treeTemplate.clone(true));
     g.position.set(tx, gy, tz);
-    g.rotation.y = Math.random() * Math.PI * 2;
+    g.rotation.y = worldRand() * Math.PI * 2;
     g.scale.setScalar(s);
     this.scene.add(g);
 
@@ -896,14 +897,14 @@ const towerBox = new THREE.Box3();
     if (this.treeTemplate) return this.plantModelTree(tx, tz);
     const gy = this.groundHeight(tx, tz);
     const trunkMat = new THREE.MeshLambertMaterial({ color: 0x694b2d });
-    const th = 2 + Math.random() * 3;
-    const cr = 1.5 + Math.random() * 2;
+    const th = 2 + worldRand() * 3;
+    const cr = 1.5 + worldRand() * 2;
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.25, th, 6), trunkMat);
     trunk.position.set(tx, gy + th / 2, tz);
     trunk.castShadow = true;
     this.scene.add(trunk);
 
-    const g = dark ? 25 + Math.floor(Math.random() * 25) : 40 + Math.floor(Math.random() * 60);
+    const g = dark ? 25 + Math.floor(worldRand() * 25) : 40 + Math.floor(worldRand() * 60);
     const canopyMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(0.1, g / 255, 0.12) });
     const canopy = new THREE.Mesh(new THREE.SphereGeometry(cr, 8, 6), canopyMat);
     canopy.position.set(tx, gy + th + cr * 0.6, tz);
@@ -934,8 +935,8 @@ const towerBox = new THREE.Box3();
     for (let i = 0; i < count; i++) {
       let cx = 15, cz = -10;
       for (let a = 0; a < 50; a++) {
-        const px = (Math.random() - 0.5) * 1200;
-        const pz = (Math.random() - 0.5) * 1200;
+        const px = (worldRand() - 0.5) * 1200;
+        const pz = (worldRand() - 0.5) * 1200;
         let nearBuilding = false;
         for (const b of this.buildings) {
           if (Math.abs(px - b.x) < b.halfW + 3 && Math.abs(pz - b.z) < b.halfD + 3) { nearBuilding = true; break; }
@@ -1183,8 +1184,8 @@ const towerBox = new THREE.Box3();
           const spots: Spot[] = [];
           let guard = 0;
           while (spots.length < 16 && guard++ < 250) {
-            const th = Math.random() * Math.PI * 2;
-            const rr = Math.sqrt(Math.random()) * (STEP * 0.72);
+            const th = worldRand() * Math.PI * 2;
+            const rr = Math.sqrt(worldRand()) * (STEP * 0.72);
             const x = gx + Math.cos(th) * rr;
             const z = gz + Math.sin(th) * rr;
             if (!this.isOnIsland(x, z, 2)) continue;
@@ -1196,7 +1197,7 @@ const towerBox = new THREE.Box3();
               if (Math.abs(x - b.x) < b.halfW + 2 && Math.abs(z - b.z) < b.halfD + 2) { inBuilding = true; break; }
             }
             if (inBuilding) continue;
-            spots.push({ x, z, sxz: 0.3 + Math.random() * 0.2, sy: 1.6 + Math.random() * 0.8, rot: Math.random() * Math.PI * 2 });
+            spots.push({ x, z, sxz: 0.3 + worldRand() * 0.2, sy: 1.6 + worldRand() * 0.8, rot: worldRand() * Math.PI * 2 });
           }
           if (spots.length > 0) cells.set(key, spots);
         }
@@ -1206,13 +1207,13 @@ const towerBox = new THREE.Box3();
         const spots: Spot[] = [];
         let guard = 0;
         while (spots.length < 10 && guard++ < 100) {
-          const th = Math.random() * Math.PI * 2;
-          const rr = 8 + Math.random() * 17;
+          const th = worldRand() * Math.PI * 2;
+          const rr = 8 + worldRand() * 17;
           const x = Math.cos(th) * rr;
           const z = 8 + Math.sin(th) * rr;
           if (Math.abs(x) < 7) continue;
           if (Math.abs(z) < 7) continue;
-          spots.push({ x, z, sxz: 0.3 + Math.random() * 0.2, sy: 1.6 + Math.random() * 0.8, rot: Math.random() * Math.PI * 2 });
+          spots.push({ x, z, sxz: 0.3 + worldRand() * 0.2, sy: 1.6 + worldRand() * 0.8, rot: worldRand() * Math.PI * 2 });
         }
         if (spots.length > 0) cells.set('spawn', spots);
       }
@@ -1230,7 +1231,7 @@ const towerBox = new THREE.Box3();
             dummy.scale.set(p.sxz, p.sy, p.sxz);
             dummy.updateMatrix();
             im.setMatrixAt(i, dummy.matrix);
-            im.setColorAt(i, col.setHSL(0.25 + Math.random() * 0.08, 0.35 + Math.random() * 0.25, 0.72 + Math.random() * 0.26));
+            im.setColorAt(i, col.setHSL(0.25 + worldRand() * 0.08, 0.35 + worldRand() * 0.25, 0.72 + worldRand() * 0.26));
           });
           im.instanceMatrix.needsUpdate = true;
           if (im.instanceColor) im.instanceColor.needsUpdate = true;
@@ -1328,8 +1329,8 @@ const towerBox = new THREE.Box3();
     const hayBody = this.fixedBody(0, -1850);
     let placed = 0, guard = 0;
     while (placed < 6 && guard++ < 60) {
-      const hx = (Math.random() - 0.5) * 160;
-      const hz = -1850 + (Math.random() - 0.5) * 160;
+      const hx = (worldRand() - 0.5) * 160;
+      const hz = -1850 + (worldRand() - 0.5) * 160;
       if (!this.isOnIsland(hx, hz, 3)) continue;
       if (Math.hypot(hx + 100, hz + 1900) < 15 || Math.hypot(hx - 80, hz + 1940) < 10) continue;
       const hay = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1.5, 10), hayMat);
@@ -1438,15 +1439,15 @@ const towerBox = new THREE.Box3();
     const body = this.fixedBody(cx, cz);
     let placed = 0, guard = 0;
     while (placed < 20 && guard++ < 300) {
-      const th = Math.random() * Math.PI * 2;
-      const rr = 5 + Math.sqrt(Math.random()) * (r - 6);
+      const th = worldRand() * Math.PI * 2;
+      const rr = 5 + Math.sqrt(worldRand()) * (r - 6);
       const sx = cx + Math.cos(th) * rr;
       const sz = cz + Math.sin(th) * rr;
       if (Math.hypot(sx - (cx + 10), sz - (cz + 10)) < 7) continue; // fora do mausoléu
       const sgy = this.groundHeight(sx, sz);
       const stone = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.25), stoneMat);
       stone.position.set(sx, sgy + 0.65, sz);
-      stone.rotation.y = Math.random() * Math.PI;
+      stone.rotation.y = worldRand() * Math.PI;
       stone.castShadow = true;
       this.scene.add(stone);
       if (placed % 2 === 0) {
@@ -1713,11 +1714,11 @@ const { x: cx, z: cz } = MINE;
     {
       const smokeMat = new THREE.MeshLambertMaterial({ color: 0x555555, transparent: true, opacity: 0.55 });
       for (let i = 0; i < 12; i++) {
-        const puff = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 2, 7, 6), smokeMat);
-        const py = ventH + 4 + Math.random() * 22;
-        puff.position.set(cx + (Math.random() - 0.5) * 8, py, cz + (Math.random() - 0.5) * 8);
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(2 + worldRand() * 2, 7, 6), smokeMat);
+        const py = ventH + 4 + worldRand() * 22;
+        puff.position.set(cx + (worldRand() - 0.5) * 8, py, cz + (worldRand() - 0.5) * 8);
         this.scene.add(puff);
-        this.smoke.push({ mesh: puff, speed: 3 + Math.random() * 3, maxY: ventH + 28 });
+        this.smoke.push({ mesh: puff, speed: 3 + worldRand() * 3, maxY: ventH + 28 });
       }
     }
     // torres de perfuração

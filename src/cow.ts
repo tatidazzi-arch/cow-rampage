@@ -1,11 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { COW_SCALE, loadCowAssets, spawnCowModel } from './cowmodel';
 
-const MODEL_BASE = 'models/cow';
-
-/** Escala da vaca: 2 = 200% do tamanho original. */
-export const COW_SCALE = 2;
+export { COW_SCALE };
 /** Metade da altura do collider (pes ficam em center - HALF_H). */
 const HALF_H = 1.1 * COW_SCALE;
 
@@ -50,54 +47,11 @@ export class Cow {
 
   private async loadModel(): Promise<void> {
     try {
-      const loader = new FBXLoader();
-      const model = await loader.loadAsync(`${MODEL_BASE}/SK_Cow.fbx`);
-
-      const texLoader = new THREE.TextureLoader();
-      const map = await texLoader.loadAsync(`${MODEL_BASE}/T_Cow_B.png`);
-      map.colorSpace = THREE.SRGBColorSpace;
-      const normalMap = await texLoader.loadAsync(`${MODEL_BASE}/T_Cow_N.png`);
-      const roughnessMap = await texLoader.loadAsync(`${MODEL_BASE}/T_Cow_R.png`);
-      const mat = new THREE.MeshStandardMaterial({
-        map,
-        normalMap,
-        roughnessMap,
-        roughness: 1.0,
-        metalness: 0.0,
-      });
-
-      model.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.castShadow = true;
-          const sm = o as THREE.SkinnedMesh;
-          if (sm.isSkinnedMesh) {
-            sm.material = mat;
-            sm.frustumCulled = false;
-          }
-        }
-      });
-
-      // O FBX ja vem com a frente em +Z (conversao do Unreal); o jogo usa +Z.
-// Nao girar: girar aqui faz a vaca andar de lado.
-      const inner = new THREE.Group();
-      inner.add(model);
-      inner.rotation.y = 0;
-      inner.updateMatrixWorld(true);
-
-      // Normaliza o tamanho: comprimento horizontal vira 2.3 * escala (bate com o collider).
-      const targetLen = 2.3 * COW_SCALE;
-      const box = new THREE.Box3().setFromObject(inner);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      const longest = Math.max(size.x, size.z);
-      const s = longest > 0 ? targetLen / longest : 1;
+      const assets = await loadCowAssets();
+      const spawned = spawnCowModel(assets);
 
       const wrap = new THREE.Group();
-      wrap.add(inner);
-      inner.scale.setScalar(s);
-      // Recentraliza no XZ e coloca os pes (min Y) na origem do grupo.
-      inner.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+      wrap.add(spawned.model);
       this.group.add(wrap);
 
       // Esconde a vaca procedural (fallback) agora que o modelo real chegou.
@@ -105,30 +59,12 @@ export class Cow {
         if (child !== wrap) child.visible = false;
       }
 
-      this.mixer = new THREE.AnimationMixer(model);
-      await this.loadAnims(loader);
+      this.mixer = spawned.mixer;
+      this.clips = spawned.clips;
       this.modelReady = true;
       this.playClip('idle', 1);
     } catch (err) {
       console.warn('Modelo FBX da vaca nao carregou, usando procedural:', err);
-    }
-  }
-
-  private async loadAnims(loader: FBXLoader): Promise<void> {
-    const files: Record<string, string> = {
-      idle: 'A_Cow_Idle_01.fbx',
-      walk: 'A_Cow_Walk_01.fbx',
-      run: 'A_Cow_Run_01.fbx',
-    };
-    for (const [name, file] of Object.entries(files)) {
-      try {
-        const anim = await loader.loadAsync(`${MODEL_BASE}/${file}`);
-        if (anim.animations.length > 0) {
-          this.clips[name] = anim.animations[0];
-        }
-      } catch (err) {
-        console.warn(`Animacao ${name} nao carregou:`, err);
-      }
     }
   }
 
@@ -166,17 +102,55 @@ export class Cow {
     }
     if (!this.modelReady) return;
     if (airborne) {
+      this.idleTime = 0;
+      this.oneShotT = 0;
       this.playClip('idle', 1);
       return;
     }
     if (speed > 6.5) {
+      this.idleTime = 0;
+      this.oneShotT = 0;
       const ts = Math.max(0.8, Math.min(1.5, speed / 8));
       this.playClip('run', ts);
     } else if (speed > 0.8) {
+      this.idleTime = 0;
+      this.oneShotT = 0;
       const ts = Math.max(0.7, Math.min(1.4, speed / 4));
       this.playClip('walk', ts);
     } else {
+      this.playIdleVariety(dt);
+    }
+  }
+
+  /** Parada: idle, e de vez em quando pasta (eat) ou descansa (idlebreak). */
+  private idleTime = 0;
+  private oneShotT = 0;
+
+  private playIdleVariety(dt: number): void {
+    if (this.oneShotT > 0) {
+      this.oneShotT -= dt;
+      if (this.oneShotT <= 0) {
+        this.oneShotT = 0;
+        this.playClip('idle', 1);
+      }
+      return;
+    }
+    if (this.currentClip === 'idlebreak' || this.currentClip === 'eat') {
       this.playClip('idle', 1);
+      return;
+    }
+    this.playClip('idle', 1);
+    this.idleTime += dt;
+    if (this.idleTime > 8 + Math.random() * 10) {
+      this.idleTime = 0;
+      const pick = Math.random() < 0.5 ? 'eat' : 'idlebreak';
+      const clip = this.clips[pick];
+      if (clip) {
+        this.oneShotT = clip.duration > 0 ? clip.duration : 3;
+        this.playClip(pick, 1);
+      } else {
+        this.idleTime = 4; // tenta de novo em breve
+      }
     }
   }
 

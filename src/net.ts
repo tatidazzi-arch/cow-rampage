@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { joinRoom, selfId } from '@trystero-p2p/torrent';
 import type { Room } from '@trystero-p2p/torrent';
+import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
 
 const APP_ID = 'cow-rampage-3d-v1';
 
@@ -53,7 +54,7 @@ export interface ScoreEntry {
   me: boolean;
 }
 
-/** Vaca simplificada de outro jogador (sem física, só interpola). */
+/** Vaca de outro jogador: mesmo modelo FBX da vaca local (+fallback em caixa). */
 export class RemoteCow {
   group = new THREE.Group();
   name: string;
@@ -61,6 +62,13 @@ export class RemoteCow {
   score = 0;
   target = new THREE.Vector3();
   targetYaw = 0;
+  modelReady = false;
+  private mixer: THREE.AnimationMixer | null = null;
+  private clips: Record<string, THREE.AnimationClip> = {};
+  private currentClip = '';
+  private fallback = new THREE.Group();
+  private idleTime = 0;
+  private oneShotT = 0;
   private legT = 0;
   private legs: THREE.Mesh[] = [];
 
@@ -74,32 +82,68 @@ export class RemoteCow {
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1, 2.2), fur);
     body.position.y = 1.2;
     body.castShadow = true;
-    this.group.add(body);
+    this.fallback.add(body);
     const collar = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.25, 0.4), band);
     collar.position.set(0, 1.4, 0.9);
-    this.group.add(collar);
+    this.fallback.add(collar);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.7), fur);
     head.position.set(0, 1.6, 1.3);
     head.castShadow = true;
-    this.group.add(head);
+    this.fallback.add(head);
     for (const [px, pz] of [[-0.4, 0.7], [0.4, 0.7], [-0.4, -0.7], [0.4, -0.7]]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.7, 0.2), dark);
       leg.position.set(px, 0.35, pz);
-      this.group.add(leg);
+      this.fallback.add(leg);
       this.legs.push(leg);
     }
     for (const s of [-0.25, 0.25]) {
       const horn = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.4, 6), dark);
       horn.position.set(s, 2.0, 1.2);
-      this.group.add(horn);
+      this.fallback.add(horn);
     }
+    this.group.add(this.fallback);
 
     const label = this.makeLabel(name, color);
-    label.position.y = 2.9;
+    label.position.y = 5.4;
     this.group.add(label);
     this.target.set(0, 1.2, 8);
     this.group.position.copy(this.target);
     scene.add(this.group);
+    void this.loadModel();
+  }
+
+  /** Carrega o MESMO modelo FBX da vaca local (compartilha o cache). */
+  private async loadModel(): Promise<void> {
+    try {
+      const assets = await loadCowAssets();
+      const spawned = spawnCowModel(assets);
+      this.group.add(spawned.model);
+      // manta na cor do jogador pra identificar de longe
+      const blanket = new THREE.Mesh(
+        new THREE.BoxGeometry(1.7, 0.18, 2.2),
+        new THREE.MeshLambertMaterial({ color: this.color }),
+      );
+      blanket.position.set(0, 3.1, -0.2);
+      this.group.add(blanket);
+      this.fallback.visible = false;
+      this.mixer = spawned.mixer;
+      this.clips = spawned.clips;
+      this.modelReady = true;
+      this.playClip('idle');
+    } catch {
+      /* mantém a vaca de caixa */
+    }
+  }
+
+  private playClip(name: string): void {
+    if (!this.mixer || !this.clips[name] || this.currentClip === name) return;
+    const next = this.mixer.clipAction(this.clips[name]);
+    next.reset();
+    if (this.currentClip && this.clips[this.currentClip]) {
+      this.mixer.clipAction(this.clips[this.currentClip]).crossFadeTo(next, 0.25, false);
+    }
+    next.play();
+    this.currentClip = name;
   }
 
   private makeLabel(name: string, color: number): THREE.Sprite {
@@ -123,23 +167,61 @@ export class RemoteCow {
   }
 
   setState(s: CowNetState) {
-    this.target.set(s.x, s.y - 1.1, s.z);
+    // mesma origem dos pés da vaca local (corpo - COW_HALF_H)
+    this.target.set(s.x, s.y - COW_HALF_H, s.z);
     this.targetYaw = s.yaw;
     this.score = s.score;
   }
 
   update(dt: number, speed: number) {
+    if (this.mixer) this.mixer.update(dt);
     const k = 1 - Math.exp(-10 * dt);
     this.group.position.lerp(this.target, k);
     let d = this.targetYaw - this.group.rotation.y;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     this.group.rotation.y += d * k;
-    if (speed > 0.8) {
+    if (this.modelReady) {
+      if (speed > 0.8) {
+        this.idleTime = 0;
+        this.oneShotT = 0;
+        this.playClip('walk');
+      } else {
+        this.playRemoteIdle(dt);
+      }
+    } else if (speed > 0.8) {
       this.legT += dt * speed * 1.6;
       this.legs.forEach((leg, i) => {
         leg.rotation.x = Math.sin(this.legT + (i % 2) * Math.PI) * 0.5;
       });
+    }
+  }
+
+  private playRemoteIdle(dt: number): void {
+    if (this.oneShotT > 0) {
+      this.oneShotT -= dt;
+      if (this.oneShotT <= 0) {
+        this.oneShotT = 0;
+        this.playClip('idle');
+      }
+      return;
+    }
+    if (this.currentClip === 'idlebreak' || this.currentClip === 'eat') {
+      this.playClip('idle');
+      return;
+    }
+    this.playClip('idle');
+    this.idleTime += dt;
+    if (this.idleTime > 8 + Math.random() * 10) {
+      this.idleTime = 0;
+      const pick = Math.random() < 0.5 ? 'eat' : 'idlebreak';
+      const clip = this.clips[pick];
+      if (clip) {
+        this.oneShotT = clip.duration > 0 ? clip.duration : 3;
+        this.playClip(pick);
+      } else {
+        this.idleTime = 4;
+      }
     }
   }
 

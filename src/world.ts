@@ -934,6 +934,15 @@ const towerBox = new THREE.Box3();
       if (pos) verts += pos.count;
       this.treeInfo.meshes++;
     });
+    // miolo sólido escuro: preenche os vãos da folhagem rala (a copa é vazada)
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 10, 8),
+      new THREE.MeshLambertMaterial({ color: 0x2a551d }),
+    );
+    core.scale.set(0.12, 0.24, 0.12);
+    core.position.set(0, 0.52, 0);
+    core.castShadow = true;
+    model.add(core);
     this.treeInfo.verts = verts;
     this.treeInfo.mats = ['acer-vertex'];
     this.treeNeedsDecimate = false;

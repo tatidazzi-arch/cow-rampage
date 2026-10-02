@@ -362,9 +362,17 @@ constructor() {}
     const el = document.getElementById('netplayerlist');
     if (!el) return;
     const list = this.net.scoreboard(this.score);
-    el.innerHTML = list.map((p) =>
+    const others = list.filter((p) => !p.me);
+    let html = `<div>Sala: <b>${this.net.roomCode}</b> 🌐${list.length}</div>`;
+    html += list.map((p) =>
       `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
-    ).join('') || '<div>Aguardando jogadores...</div>';
+    ).join('');
+    if (others.length === 0) {
+      html += '<div style="color:#ffcc00">🔍 Procurando jogadores...<br>Confira se o código é igual nos dois e aguarde até 1 min.</div>';
+    } else {
+      html += '<div style="color:#7fff7f">✅ Conectado! Cliquem JOGAR ONLINE nos dois.</div>';
+    }
+    el.innerHTML = html;
   }
 
   private beginPlay(multiplayer: boolean) {

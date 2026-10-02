@@ -4,6 +4,20 @@ import type { Room } from '@trystero-p2p/torrent';
 
 const APP_ID = 'cow-rampage-3d-v1';
 
+/** TURN público gratuito (OpenRelay) — ajuda a conectar através de NATs
+ *  restritivos onde o P2P direto (STUN) não passa. Sem conta nem chave. */
+const TURN_SERVERS = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
 export interface CowNetState {
   [key: string]: number | string | boolean;
   x: number;
@@ -147,6 +161,11 @@ export class NetManager {
   private helloAction: { send: (p: PlayerProfile) => Promise<void> } | null = null;
   private eventAction: { send: (e: NetEventMsg) => Promise<void> } | null = null;
   private profiles = new Map<string, PlayerProfile & { score: number }>();
+  private helloTimer = 0;
+
+  private sendHello(): void {
+    this.helloAction?.send({ name: this.myName, color: this.myColor }).catch(() => {});
+  }
 
   get id(): string {
     return selfId;
@@ -167,7 +186,7 @@ export class NetManager {
     this.myName = name.trim().slice(0, 12) || 'Jimmy';
     this.myColor = color;
     this.profiles.clear();
-    this.room = joinRoom({ appId: APP_ID }, 'cow-' + this.roomCode);
+    this.room = joinRoom({ appId: APP_ID, turnConfig: TURN_SERVERS }, 'cow-' + this.roomCode);
 
     const cowAction = this.room.makeAction<CowNetState>('cow');
     const helloAction = this.room.makeAction<PlayerProfile>('hello');
@@ -181,7 +200,7 @@ export class NetManager {
     };
     helloAction.onMessage = (p, ctx) => {
       this.profiles.set(ctx.peerId, { name: p.name, color: p.color, score: 0 });
-      this.helloAction?.send({ name: this.myName, color: this.myColor }).catch(() => {});
+      this.sendHello();
       if (this.onPeers) this.onPeers();
     };
     eventAction.onMessage = (e, ctx) => {
@@ -189,7 +208,7 @@ export class NetManager {
       if (this.onEvent) this.onEvent(e, pr ? pr.name : '?');
     };
     this.room.onPeerJoin = () => {
-      this.helloAction?.send({ name: this.myName, color: this.myColor }).catch(() => {});
+      this.sendHello();
       if (this.onPeers) this.onPeers();
     };
     this.room.onPeerLeave = (peerId: string) => {
@@ -198,6 +217,12 @@ export class NetManager {
       if (this.onPeers) this.onPeers();
     };
     if (this.onPeers) this.onPeers();
+    // reanuncia presença a cada 10s (caso um hello se perca no caminho)
+    window.clearInterval(this.helloTimer);
+    this.sendHello();
+    this.helloTimer = window.setInterval(() => {
+      if (this.room) this.sendHello();
+    }, 10000);
   }
 
   private handleCow: ((s: CowNetState, peerId: string) => void) | null = null;
@@ -236,6 +261,8 @@ export class NetManager {
   }
 
   async leave(): Promise<void> {
+    window.clearInterval(this.helloTimer);
+    this.helloTimer = 0;
     this.profiles.clear();
     if (this.room) {
       const r = this.room;

@@ -350,6 +350,8 @@ constructor() {}
     }
     try {
       this.net.join(code, name || 'Jimmy', this.net.myColor);
+      // atualiza a lista ao vivo (antes mesmo de clicar JOGAR)
+      this.net.onPeers = () => this.renderNetList();
       document.getElementById('netPlay')!.style.display = 'block';
       err.textContent = 'Sala: ' + this.net.roomCode + ' — chame os amigos!';
       this.renderNetList();
@@ -363,7 +365,9 @@ constructor() {}
     if (!el) return;
     const list = this.net.scoreboard(this.score);
     const others = list.filter((p) => !p.me);
+    const dbg = this.net.debugStatus();
     let html = `<div>Sala: <b>${this.net.roomCode}</b> 🌐${list.length}</div>`;
+    html += `<div style="font-size:13px;color:#999">📡 trackers ${dbg.trackersOpen}/${dbg.trackersTotal} · P2P ${dbg.peers} · vistos ${dbg.known}</div>`;
     html += list.map((p) =>
       `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
     ).join('');

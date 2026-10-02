@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { joinRoom, selfId } from '@trystero-p2p/torrent';
+import { joinRoom, selfId, getRelaySockets } from '@trystero-p2p/torrent';
 import type { Room } from '@trystero-p2p/torrent';
 import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
 
@@ -304,6 +304,7 @@ export class NetManager {
     this.sendHello();
     this.helloTimer = window.setInterval(() => {
       if (this.room) this.sendHello();
+      if (this.onPeers) this.onPeers();
     }, 10000);
   }
 
@@ -331,6 +332,27 @@ export class NetManager {
 
   profileOf(peerId: string): PlayerProfile | null {
     return this.profiles.get(peerId) ?? null;
+  }
+
+  /** Diagnóstico de conexão pro lobby: trackers abertos, pares P2P e hellos. */
+  debugStatus(): { trackersOpen: number; trackersTotal: number; peers: number; known: number } {
+    let open = 0;
+    let total = 0;
+    try {
+      const sockets = getRelaySockets() as Record<string, { readyState?: number }>;
+      for (const key of Object.keys(sockets)) {
+        total++;
+        if (sockets[key]?.readyState === 1) open++;
+      }
+    } catch {
+      /* ignora */
+    }
+    return {
+      trackersOpen: open,
+      trackersTotal: total,
+      peers: this.room ? Object.keys(this.room.getPeers()).length : 0,
+      known: this.profiles.size + 1,
+    };
   }
 
   scoreboard(myScore: number): ScoreEntry[] {

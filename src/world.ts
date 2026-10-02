@@ -846,54 +846,15 @@ const towerBox = new THREE.Box3();
 
   private async loadTreeTemplate(): Promise<void> {
     const t0 = performance.now();
-    const loader = new GLTFLoader();
-    const gltf = await loader.loadAsync('models/tree/tree.glb');
-    const model = gltf.scene;
+    let model: THREE.Object3D;
+    try {
+      model = await this.loadAcerModel();
+    } catch (err) {
+      console.warn('Acer nao carregou, usando gleditsia:', err);
+      model = await this.loadGleditsiaModel();
+    }
     this.treeInfo.parseMs = Math.round(performance.now() - t0);
     const tTrav = performance.now();
-
-    // O conversor nao embutiu as texturas: atribui manualmente (mapeamento do pack).
-    const texLoader = new THREE.TextureLoader();
-    const [barkMap, leafMap, flowerMap, branchMap, leafAlpha, flowerAlpha] = await Promise.all([
-      texLoader.loadAsync('models/tree/gleditsia triacanthos bark2 a1.jpg').catch(() => null),
-      texLoader.loadAsync('models/tree/gleditsia triacanthos leaf color b1.jpg').catch(() => null),
-      texLoader.loadAsync('models/tree/gleditsia triacanthos flowers color.jpg').catch(() => null),
-      texLoader.loadAsync('models/tree/gleditsia triacanthos bark reflect.jpg').catch(() => null),
-      texLoader.loadAsync('models/tree/gleditsia triacanthos leaf mask.jpg').catch(() => null),
-      texLoader.loadAsync('models/tree/gleditsia triacanthos flowers mask.jpg').catch(() => null),
-    ]);
-    const colorMaps: Record<string, THREE.Texture | null> = {
-      Material__6: barkMap, Material__8: leafMap, Material__14: flowerMap, Material__5: branchMap,
-    };
-    const alphaMaps: Record<string, THREE.Texture | null> = {
-      Material__8: leafAlpha, Material__14: flowerAlpha,
-    };
-
-    let verts = 0;
-    model.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      m.castShadow = true;
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (pos) verts += pos.count;
-      const mats = Array.isArray(m.material) ? m.material : [m.material];
-      for (const mat of mats) {
-        const std = mat as THREE.MeshStandardMaterial;
-        const name = mat.name || '';
-        if (colorMaps[name] && !std.map) std.map = colorMaps[name];
-        if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
-        if (alphaMaps[name]) {
-          std.alphaMap = alphaMaps[name];
-          std.transparent = false;
-          std.alphaTest = 0.45;
-          std.side = THREE.DoubleSide;
-        }
-      }
-      const allNames = mats.map((mm) => mm.name || '?').join(',');
-      if (!this.treeInfo.mats.includes(allNames)) this.treeInfo.mats.push(allNames);
-      this.treeInfo.meshes++;
-    });
-    this.treeInfo.verts = verts;
 
     // normaliza: altura 1, pes em 0, centrado
     const all = new THREE.Box3().setFromObject(model);
@@ -943,15 +904,92 @@ const towerBox = new THREE.Box3();
     this.treeMetrics.canopyY = (trunkTop + 1) / 2;
     this.treeMetrics.canopyR = canopyR;
 
-    // dizima o template (375k verts -> ~30k tris): igual de longe, 10x menos vértices
-    wrap.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) this.decimateGeometry(m.geometry, 12);
-    });
+    // dizima só a gleditsia (a acer já vem dizimada do conversor)
+    if (this.treeNeedsDecimate) {
+      wrap.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) this.decimateGeometry(m.geometry, 12);
+      });
+    }
 
     this.treeTemplate = wrap;
     this.treeInfo.tMetricsMs = Math.round(performance.now() - tMet);
     this.treeInfo.loaded = true;
+  }
+
+  private treeNeedsDecimate = false;
+
+  /** Acer do pack do usuário (GLB leve com cor por vértice). */
+  private async loadAcerModel(): Promise<THREE.Object3D> {
+    const gltf = await new GLTFLoader().loadAsync('models/tree/acer.glb');
+    const model = gltf.scene;
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    let verts = 0;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.material = mat;
+      m.castShadow = true;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (pos) verts += pos.count;
+      this.treeInfo.meshes++;
+    });
+    this.treeInfo.verts = verts;
+    this.treeInfo.mats = ['acer-vertex'];
+    this.treeNeedsDecimate = false;
+    return model;
+  }
+
+  /** Gleditsia original (fallback se a acer falhar). */
+  private async loadGleditsiaModel(): Promise<THREE.Object3D> {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync('models/tree/tree.glb');
+    const model = gltf.scene;
+
+    // O conversor nao embutiu as texturas: atribui manualmente (mapeamento do pack).
+    const texLoader = new THREE.TextureLoader();
+    const [barkMap, leafMap, flowerMap, branchMap, leafAlpha, flowerAlpha] = await Promise.all([
+      texLoader.loadAsync('models/tree/gleditsia triacanthos bark2 a1.jpg').catch(() => null),
+      texLoader.loadAsync('models/tree/gleditsia triacanthos leaf color b1.jpg').catch(() => null),
+      texLoader.loadAsync('models/tree/gleditsia triacanthos flowers color.jpg').catch(() => null),
+      texLoader.loadAsync('models/tree/gleditsia triacanthos bark reflect.jpg').catch(() => null),
+      texLoader.loadAsync('models/tree/gleditsia triacanthos leaf mask.jpg').catch(() => null),
+      texLoader.loadAsync('models/tree/gleditsia triacanthos flowers mask.jpg').catch(() => null),
+    ]);
+    const colorMaps: Record<string, THREE.Texture | null> = {
+      Material__6: barkMap, Material__8: leafMap, Material__14: flowerMap, Material__5: branchMap,
+    };
+    const alphaMaps: Record<string, THREE.Texture | null> = {
+      Material__8: leafAlpha, Material__14: flowerAlpha,
+    };
+
+    let verts = 0;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.castShadow = true;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (pos) verts += pos.count;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        const std = mat as THREE.MeshStandardMaterial;
+        const name = mat.name || '';
+        if (colorMaps[name] && !std.map) std.map = colorMaps[name];
+        if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
+        if (alphaMaps[name]) {
+          std.alphaMap = alphaMaps[name];
+          std.transparent = false;
+          std.alphaTest = 0.45;
+          std.side = THREE.DoubleSide;
+        }
+      }
+      const allNames = mats.map((mm) => mm.name || '?').join(',');
+      if (!this.treeInfo.mats.includes(allNames)) this.treeInfo.mats.push(allNames);
+      this.treeInfo.meshes++;
+    });
+    this.treeInfo.verts = verts;
+    this.treeNeedsDecimate = true;
+    return model;
   }
 
   /** Fila de árvores pra instanciar (1 InstancedMesh por mesh do template). */
@@ -984,7 +1022,8 @@ const towerBox = new THREE.Box3();
     return true;
   }
 
-  /** Cria os InstancedMesh da fila (chamar ao fim de cada plantio). */
+  /** Cria os InstancedMesh da fila (chamar ao fim de cada plantio).
+   *  Agrupa por célula de 640m pra frustum culling voltar a funcionar. */
   private flushTreeInstances(castShadow: boolean): void {
     const queue = this.treeQueue;
     this.treeQueue = [];
@@ -995,28 +1034,41 @@ const towerBox = new THREE.Box3();
       const m = o as THREE.Mesh;
       if (m.isMesh) parts.push(m);
     });
+    const CELL = 320;
+    const cells = new Map<string, typeof queue>();
+    for (const q of queue) {
+      const key = Math.floor(q.tx / CELL) + ',' + Math.floor(q.tz / CELL);
+      let arr = cells.get(key);
+      if (!arr) {
+        arr = [];
+        cells.set(key, arr);
+      }
+      arr.push(q);
+    }
     const pos = new THREE.Vector3();
     const quat = new THREE.Quaternion();
     const scl = new THREE.Vector3();
     const eul = new THREE.Euler();
     const treeM = new THREE.Matrix4();
     const finalM = new THREE.Matrix4();
-    for (const part of parts) {
-      const im = new THREE.InstancedMesh(part.geometry, part.material, queue.length);
-      queue.forEach((q, i) => {
-        pos.set(q.tx, q.gy, q.tz);
-        eul.set(0, q.rot, 0);
-        quat.setFromEuler(eul);
-        scl.set(q.s, q.s, q.s);
-        treeM.compose(pos, quat, scl);
-        // inclui o transform local da parte dentro do template
-        finalM.multiplyMatrices(treeM, part.matrixWorld);
-        im.setMatrixAt(i, finalM);
-      });
-      im.instanceMatrix.needsUpdate = true;
-      im.castShadow = castShadow;
-      im.computeBoundingSphere();
-      this.scene.add(im);
+    for (const cell of cells.values()) {
+      for (const part of parts) {
+        const im = new THREE.InstancedMesh(part.geometry, part.material, cell.length);
+        cell.forEach((q, i) => {
+          pos.set(q.tx, q.gy, q.tz);
+          eul.set(0, q.rot, 0);
+          quat.setFromEuler(eul);
+          scl.set(q.s, q.s, q.s);
+          treeM.compose(pos, quat, scl);
+          // inclui o transform local da parte dentro do template
+          finalM.multiplyMatrices(treeM, part.matrixWorld);
+          im.setMatrixAt(i, finalM);
+        });
+        im.instanceMatrix.needsUpdate = true;
+        im.castShadow = castShadow;
+        im.computeBoundingSphere();
+        this.scene.add(im);
+      }
     }
   }
 

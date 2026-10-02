@@ -672,7 +672,7 @@ constructor() {}
 
   private updateCow(dt: number) {
     const running = this.input.isDown('ShiftLeft', 'ShiftRight');
-    const speed = running ? 9 : 5;
+    const speed = running ? 11 : 6;
 
     const fwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
     const rgt = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
@@ -762,7 +762,7 @@ constructor() {}
         this.wallRunDir.copy(right);
         const back = this.input.isDown('KeyS', 'ArrowDown');
         const wrDir = back ? this.wallRunDir.clone().multiplyScalar(-1) : this.wallRunDir.clone();
-        const spd = running ? 12 : 8;
+        const spd = running ? 13 : 9;
         body.setLinvel({
           x: wrDir.x * spd - this.wallRunNormal.x * 2,
           y: 0,

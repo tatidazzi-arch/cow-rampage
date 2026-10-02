@@ -39,11 +39,13 @@ export interface PlayerProfile {
 
 export interface NetEventMsg {
   [key: string]: number | string | boolean;
-  type: 'boom';
+  type: 'boom' | 'hit';
   text: string;
   x: number;
   y: number;
   z: number;
+  /** hit: só a vítima com esse id aplica (os outros ignoram); '' = pra todos */
+  target: string;
 }
 
 export interface ScoreEntry {
@@ -319,7 +321,12 @@ export class NetManager {
   }
 
   sendBoom(text: string, x: number, y: number, z: number): void {
-    if (this.eventAction) this.eventAction.send({ type: 'boom', text, x, y, z }).catch(() => {});
+    if (this.eventAction) this.eventAction.send({ type: 'boom', text, x, y, z, target: '' }).catch(() => {});
+  }
+
+  /** Cabeçada PvP: avisa a vítima onde foi o golpe (só ela aplica). */
+  sendHit(targetPeerId: string, x: number, z: number): void {
+    if (this.eventAction) this.eventAction.send({ type: 'hit', text: '', x, y: 0, z, target: targetPeerId }).catch(() => {});
   }
 
   updateScore(peerId: string, score: number): void {

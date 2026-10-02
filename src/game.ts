@@ -9,6 +9,7 @@ import { MissionManager } from './missions';
 import { NetManager, RemoteCow } from './net';
 import type { CowNetState } from './net';
 import { worldRand } from './rng';
+import { COW_HALF_H } from './cowmodel';
 import { isTouchDevice, setupTouchControls } from './touch';
 
 export class Game {
@@ -394,8 +395,8 @@ constructor() {}
         if (!rc) {
           const prof = this.net.profileOf(peerId);
           rc = new RemoteCow(this.scene, prof ? prof.name : '?', prof ? prof.color : 0xffffff);
-          rc.group.position.set(s.x, s.y - 1.1, s.z);
-          rc.target.set(s.x, s.y - 1.1, s.z);
+          rc.group.position.set(s.x, s.y - COW_HALF_H, s.z);
+          rc.target.set(s.x, s.y - COW_HALF_H, s.z);
           this.remoteCows.set(peerId, rc);
           this.showMessage((prof ? prof.name : 'Alguém') + ' entrou! 🐄');
         }
@@ -415,6 +416,22 @@ constructor() {}
         if (e.type === 'boom') {
           this.spawnParticles(e.x, e.y, e.z, 12, 0xff6600);
           this.showMessage(fromName + ': ' + e.text);
+        } else if (e.type === 'hit') {
+          // cabeçada PvP: só aplica se fui o alvo e estou perto do golpe
+          if (typeof e.target !== 'string' || e.target !== this.net.id) return;
+          const t = this.cow.body.translation();
+          let dx = t.x - e.x;
+          let dz = t.z - e.z;
+          if (Math.hypot(dx, dz) >= 5) return;
+          if (Math.hypot(dx, dz) < 0.001) {
+            const a = Math.random() * Math.PI * 2;
+            dx = Math.cos(a);
+            dz = Math.sin(a);
+          }
+          const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(120);
+          this.cow.body.applyImpulse({ x: push.x, y: 80, z: push.z }, true);
+          this.showMessage(fromName + ' te deu CABECADA!');
+          this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
         }
       };
     }
@@ -625,8 +642,8 @@ constructor() {}
       if (d < 5) {
         this.setNPCState(n, 'stunned');
         n.stateTimer = 5;
-        const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(300);
-        n.body.applyImpulse({ x: push.x, y: 200, z: push.z }, true);
+        const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(170);
+        n.body.applyImpulse({ x: push.x, y: 120, z: push.z }, true);
         this.score += 3;
         this.chaos = Math.min(100, this.chaos + 5);
         this.missions.event('headbutt');
@@ -634,6 +651,21 @@ constructor() {}
         if (this.netActive) this.net.sendBoom('CABECADA!', t.x, t.y + 1, t.z);
         this.showMessage('CABECADA!');
         this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
+      }
+    }
+    // PvP: cabeçada pega nas vacas dos amigos (hitbox = raio 5 na posição sincronizada)
+    if (this.netActive) {
+      for (const [peerId, rc] of this.remoteCows) {
+        const dx = rc.target.x - cx;
+        const dz = rc.target.z - cz;
+        if (Math.hypot(dx, dz) < 5) {
+          this.net.sendHit(peerId, cx, cz);
+          this.score += 3;
+          this.chaos = Math.min(100, this.chaos + 5);
+          this.missions.event('headbutt');
+          this.showMessage('CABECADA no ' + rc.name + '!');
+          this.spawnParticles(rc.target.x, rc.target.y + 1, rc.target.z, 8, 0xff4444);
+        }
       }
     }
   }

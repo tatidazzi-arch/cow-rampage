@@ -981,8 +981,8 @@ const towerBox = new THREE.Box3();
       base.castShadow = true;
       group.add(base);
       const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.4, 3.5, 8), barrelMat);
-      barrel.rotation.x = -Math.PI / 4;
-      barrel.position.set(0, 1.5, 1.2);
+      barrel.rotation.x = Math.PI / 4;
+      barrel.position.set(0, 1.5, -1.2);
       barrel.castShadow = true;
       group.add(barrel);
       for (const s of [-0.9, 0.9]) {
@@ -992,7 +992,7 @@ const towerBox = new THREE.Box3();
         group.add(wheel);
       }
       const btn = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), redMat);
-      btn.position.set(0, 0.9, 1.3);
+      btn.position.set(0, 0.9, -1.3);
       group.add(btn);
 
       group.position.set(cx, this.groundHeight(cx, cz), cz);

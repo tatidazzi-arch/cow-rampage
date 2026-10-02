@@ -556,7 +556,7 @@ constructor() {}
         near.loadedNPC = this.carrying.id;
         this.missions.event('load');
         this.setNPCState(this.carrying, 'inCannon');
-        this.carrying.body.setTranslation({ x: near.x, y: 2, z: near.z + 2 }, true);
+        this.carrying.body.setTranslation({ x: near.x, y: 2, z: near.z - 2 }, true);
         this.carrying.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
         this.carrying = null;
         this.showMessage('Colocado no canhao! E de novo pra atirar!');
@@ -573,7 +573,7 @@ constructor() {}
       const npc = this.npcs.find((n) => n.id === loadedCannon.loadedNPC);
       if (npc) {
         this.setNPCState(npc, 'launched');
-        npc.body.setLinvel({ x: 0, y: 12, z: 8 }, true);
+        npc.body.setLinvel({ x: 0, y: 12, z: -8 }, true);
         npc.body.setAngvel({ x: 2, y: 0, z: 0 }, true);
         loadedCannon.loadedNPC = null;
         this.missions.event('fire');
@@ -955,9 +955,9 @@ constructor() {}
       if (c.loadedNPC !== null) {
         const npc = this.npcs.find((n) => n.id === c.loadedNPC);
         if (npc) {
-          npc.body.setTranslation({ x: c.x, y: 2, z: c.z + 2 }, true);
+          npc.body.setTranslation({ x: c.x, y: 2, z: c.z - 2 }, true);
           npc.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-          npc.mesh.position.set(c.x, 2 - 0.72, c.z + 2);
+          npc.mesh.position.set(c.x, 2 - 0.72, c.z - 2);
         }
       }
     }

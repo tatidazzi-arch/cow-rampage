@@ -246,7 +246,7 @@ constructor() {}
     start.innerHTML = `
       <div id="lockscreen">
         <p>Digite a senha para continuar</p>
-        <input id="pwInput" type="password" placeholder="Senha" autocomplete="off" />
+        <input id="pwInput" type="password" placeholder="Senha" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
         <div id="pwError"></div>
         <button id="unlockBtn">ENTRAR</button>
       </div>
@@ -314,7 +314,7 @@ constructor() {}
   }
 
   private startGame() {
-    const pw = (document.getElementById('pwInput') as HTMLInputElement | null)?.value ?? '';
+    const pw = ((document.getElementById('pwInput') as HTMLInputElement | null)?.value ?? '').trim().toLowerCase();
     if (pw !== 'cowcow') {
       const err = document.getElementById('pwError');
       if (err) err.textContent = 'Senha incorreta!';

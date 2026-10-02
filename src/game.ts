@@ -622,6 +622,8 @@ constructor() {}
   private setNPCState(npc: NPCPhysics, state: NPCPhysics['state'], timer = 0) {
     npc.state = state;
     npc.stateTimer = timer;
+    // dentro do canhao some (em vez de ficar andando em cima do tubo)
+    npc.mesh.visible = state !== 'inCannon';
     // carregando/no canhao vira sensor: nao engancha nas paredes nem empurra a vaca
     npc.collider.setSensor(state === 'carried' || state === 'inCannon');
     // desbloqueia rotacao quando nao está andando normal

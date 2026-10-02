@@ -759,11 +759,20 @@ const towerBox = new THREE.Box3();
         this.showLoading(60 + built / count * 20, 'Plantando arvores...');
       }
     }
+    this.flushTreeInstances(true);
   }
 
-  /** Mata densa da floresta (copas escuras). */
+  /** Mata densa da floresta: procedural escuro instanciado (2 draws p/ 150 árvores). */
   async buildForestPatch(cx: number, cz: number, r: number, count: number) {
     await this.ensureTreeTemplate();
+    const trunks: THREE.Matrix4[] = [];
+    const canopies: THREE.Matrix4[] = [];
+    const colors: THREE.Color[] = [];
+    const m4pos = new THREE.Vector3();
+    const m4quat = new THREE.Quaternion();
+    const m4scl = new THREE.Vector3();
+    const m4eul = new THREE.Euler();
+    const col = new THREE.Color();
     let built = 0;
     let attempts = 0;
     while (built < count && attempts < count * 30) {
@@ -773,7 +782,54 @@ const towerBox = new THREE.Box3();
       const tx = cx + Math.cos(th) * rr;
       const tz = cz + Math.sin(th) * rr;
       if (!this.isOnIsland(tx, tz, 3)) continue;
-      if (this.tryPlantTree(tx, tz, true)) built++;
+      let inBuilding = false;
+      for (const b of this.buildings) {
+        if (Math.abs(tx - b.x) < b.halfW + 1.5 && Math.abs(tz - b.z) < b.halfD + 1.5) { inBuilding = true; break; }
+      }
+      if (inBuilding) continue;
+      const gy = this.groundHeight(tx, tz);
+      const th2 = 2 + worldRand() * 3;
+      const cr = 1.5 + worldRand() * 2;
+      const g = 25 + Math.floor(worldRand() * 25);
+      m4pos.set(tx, gy + th2 / 2, tz);
+      m4eul.set(0, 0, 0);
+      m4quat.setFromEuler(m4eul);
+      m4scl.set(1, th2, 1);
+      trunks.push(new THREE.Matrix4().compose(m4pos.clone(), m4quat.clone(), m4scl.clone()));
+      m4pos.set(tx, gy + th2 + cr * 0.6, tz);
+      m4scl.set(cr, cr, cr);
+      canopies.push(new THREE.Matrix4().compose(m4pos.clone(), m4quat.clone(), m4scl.clone()));
+      colors.push(col.setRGB(0.1, g / 255, 0.12).clone());
+      const body = this.fixedBody(tx, tz);
+      this.world.createCollider(RAPIER.ColliderDesc.capsule(Math.max(0.2, th2 / 2), 0.28)
+        .setTranslation(0, gy + th2 / 2, 0), body);
+      this.world.createCollider(RAPIER.ColliderDesc.ball(cr * 0.75)
+        .setTranslation(0, gy + th2 + cr * 0.6, 0)
+        .setSensor(true), body);
+      this.trees.push({ id: this.nextId(), x: tx, z: tz, radius: cr, topY: gy + th2 + cr * 0.6 + cr * 0.75, scale: 1, trunk: this.treeDummy, canopy: this.treeDummy, body });
+      built++;
+    }
+    if (trunks.length > 0) {
+      const trunkIM = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(0.15, 0.25, 1, 6),
+        new THREE.MeshLambertMaterial({ color: 0x694b2d }), trunks.length);
+      trunks.forEach((mm, i) => trunkIM.setMatrixAt(i, mm));
+      trunkIM.instanceMatrix.needsUpdate = true;
+      trunkIM.castShadow = false;
+      trunkIM.computeBoundingSphere();
+      this.scene.add(trunkIM);
+      const canopyIM = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1, 8, 6),
+        new THREE.MeshLambertMaterial({ color: 0xffffff }), canopies.length);
+      canopies.forEach((mm, i) => {
+        canopyIM.setMatrixAt(i, mm);
+        canopyIM.setColorAt(i, colors[i]!);
+      });
+      canopyIM.instanceMatrix.needsUpdate = true;
+      if (canopyIM.instanceColor) canopyIM.instanceColor.needsUpdate = true;
+      canopyIM.castShadow = false;
+      canopyIM.computeBoundingSphere();
+      this.scene.add(canopyIM);
     }
   }
 
@@ -887,22 +943,28 @@ const towerBox = new THREE.Box3();
     this.treeMetrics.canopyY = (trunkTop + 1) / 2;
     this.treeMetrics.canopyR = canopyR;
 
+    // dizima o template (375k verts -> ~30k tris): igual de longe, 10x menos vértices
+    wrap.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) this.decimateGeometry(m.geometry, 12);
+    });
+
     this.treeTemplate = wrap;
     this.treeInfo.tMetricsMs = Math.round(performance.now() - tMet);
     this.treeInfo.loaded = true;
   }
+
+  /** Fila de árvores pra instanciar (1 InstancedMesh por mesh do template). */
+  private treeQueue: { tx: number; tz: number; s: number; rot: number; gy: number }[] = [];
+  private readonly treeDummy = new THREE.Group();
 
   /** Planta um clone do modelo (altura 4.5-8m, giro aleatório). */
   private plantModelTree(tx: number, tz: number): boolean {
     if (!this.treeTemplate) return false;
     const s = 4.5 + worldRand() * 3.5;
     const gy = this.groundHeight(tx, tz);
-    const g = new THREE.Group();
-    g.add(this.treeTemplate.clone(true));
-    g.position.set(tx, gy, tz);
-    g.rotation.y = worldRand() * Math.PI * 2;
-    g.scale.setScalar(s);
-    this.scene.add(g);
+    const rot = worldRand() * Math.PI * 2;
+    this.treeQueue.push({ tx, tz, s, rot, gy });
 
     const m = this.treeMetrics;
     const body = this.fixedBody(tx, tz);
@@ -917,9 +979,45 @@ const towerBox = new THREE.Box3();
 
     this.trees.push({
       id: this.nextId(), x: tx, z: tz, radius: m.canopyR * s, topY: gy + s,
-      scale: s, trunk: g, canopy: g, body,
+      scale: s, trunk: this.treeDummy, canopy: this.treeDummy, body,
     });
     return true;
+  }
+
+  /** Cria os InstancedMesh da fila (chamar ao fim de cada plantio). */
+  private flushTreeInstances(castShadow: boolean): void {
+    const queue = this.treeQueue;
+    this.treeQueue = [];
+    if (queue.length === 0 || !this.treeTemplate) return;
+    this.treeTemplate.updateMatrixWorld(true);
+    const parts: THREE.Mesh[] = [];
+    this.treeTemplate.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) parts.push(m);
+    });
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    const eul = new THREE.Euler();
+    const treeM = new THREE.Matrix4();
+    const finalM = new THREE.Matrix4();
+    for (const part of parts) {
+      const im = new THREE.InstancedMesh(part.geometry, part.material, queue.length);
+      queue.forEach((q, i) => {
+        pos.set(q.tx, q.gy, q.tz);
+        eul.set(0, q.rot, 0);
+        quat.setFromEuler(eul);
+        scl.set(q.s, q.s, q.s);
+        treeM.compose(pos, quat, scl);
+        // inclui o transform local da parte dentro do template
+        finalM.multiplyMatrices(treeM, part.matrixWorld);
+        im.setMatrixAt(i, finalM);
+      });
+      im.instanceMatrix.needsUpdate = true;
+      im.castShadow = castShadow;
+      im.computeBoundingSphere();
+      this.scene.add(im);
+    }
   }
 
   private tryPlantTree(tx: number, tz: number, dark: boolean): boolean {
@@ -1187,7 +1285,7 @@ const towerBox = new THREE.Box3();
       model.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
-        const geo = this.decimateGeometry(m.geometry.clone().applyMatrix4(norm), 24);
+        const geo = this.decimateGeometry(m.geometry.clone().applyMatrix4(norm), 36);
         const gp = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
         if (gp) {
           const idx = geo.index;

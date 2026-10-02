@@ -332,15 +332,24 @@ private buildRoads() {
       s2.receiveShadow = true;
       this.scene.add(s2);
     }
-    for (let i = -1080; i <= 1150; i += 6) {
-      const l1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 2), lineMat);
-      l1.position.set(0, 0.16, i);
-      this.scene.add(l1);
-    }
-    for (let i = -1400; i <= 1150; i += 6) {
-      const l2 = new THREE.Mesh(new THREE.BoxGeometry(2, 0.12, 0.3), lineMat);
-      l2.position.set(i, 0.16, 0);
-      this.scene.add(l2);
+    // faixas: 1 InstancedMesh (~800 faixas em 1 draw call; E-W usa a mesma geo girada)
+    {
+      const mats: THREE.Matrix4[] = [];
+      const m4 = new THREE.Matrix4();
+      for (let i = -1080; i <= 1150; i += 6) {
+        m4.makeTranslation(0, 0.16, i);
+        mats.push(m4.clone());
+      }
+      for (let i = -1400; i <= 1150; i += 6) {
+        m4.makeRotationY(Math.PI / 2);
+        m4.setPosition(i, 0.16, 0);
+        mats.push(m4.clone());
+      }
+      const lines = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 0.12, 2), lineMat, mats.length);
+      mats.forEach((mm, idx) => lines.setMatrixAt(idx, mm));
+      lines.instanceMatrix.needsUpdate = true;
+      lines.receiveShadow = true;
+      this.scene.add(lines);
     }
   }
 
@@ -578,7 +587,7 @@ const towerBox = new THREE.Box3();
   private tryModelBuilding(bx: number, bz: number, target: number): boolean {
     const tpl = this.buildingTemplates[Math.floor(worldRand() * this.buildingTemplates.length)];
     if (!tpl || tpl.height <= 0) return false;
-    const bh = (6 + worldRand() * 20) * 20; // torres de 120-520m
+    const bh = 80 + worldRand() * 120; // torres de 80-200m
     const s = bh / tpl.height;
     let halfW = tpl.halfW * s;
     let halfD = tpl.halfD * s;
@@ -601,6 +610,13 @@ const towerBox = new THREE.Box3();
     g.position.set(bx, -tpl.minY * s, bz);
     g.scale.setScalar(s);
     g.rotation.y = rotIdx * Math.PI / 2;
+    // sombra só perto do centro (além de 200m não projeta: economiza o shadow map)
+    if (Math.hypot(bx - CITY.x, bz - CITY.z) > 200) {
+      g.traverse((o) => {
+        const mm = o as THREE.Mesh;
+        if (mm.isMesh) mm.castShadow = false;
+      });
+    }
     this.scene.add(g);
     const body = this.fixedBody(bx, bz);
     const collider = this.world.createCollider(
@@ -646,7 +662,8 @@ const towerBox = new THREE.Box3();
         new THREE.MeshLambertMaterial({ color }),
       );
       mesh.position.set(bx, bh / 2, bz);
-      mesh.castShadow = true;
+      const nearCity = Math.hypot(bx - CITY.x, bz - CITY.z) <= 200;
+      mesh.castShadow = nearCity;
       mesh.receiveShadow = true;
       this.scene.add(mesh);
 
@@ -655,7 +672,7 @@ const towerBox = new THREE.Box3();
         new THREE.MeshLambertMaterial({ color: roofColors[Math.floor(worldRand() * roofColors.length)] }),
       );
       roof.position.set(bx, bh + 0.2, bz);
-      roof.castShadow = true;
+      roof.castShadow = nearCity;
       this.scene.add(roof);
 
       this.addWindows(bx, bh, bz, bw, bd);
@@ -689,21 +706,36 @@ const towerBox = new THREE.Box3();
   }
 
   private addWindows(bx: number, bh: number, bz: number, bw: number, bd: number) {
-    const winMat1 = new THREE.MeshLambertMaterial({ color: 0xffffaa });
-    const winMat2 = new THREE.MeshLambertMaterial({ color: 0x3c5069 });
+    // 1 InstancedMesh por prédio (acesa/apagada por cor de instância; sem sombra)
+    const lit = new THREE.Color(0xffffaa);
+    const dark = new THREE.Color(0x3c5069);
+    const mats: THREE.Matrix4[] = [];
+    const cols: THREE.Color[] = [];
+    const m4 = new THREE.Matrix4();
     for (let fy = 2; fy < bh - 1; fy += 4) {
       for (let fx = -bw / 2 + 1; fx < bw / 2; fx += 3.2) {
         for (const fd of [-bd / 2 - 0.01, bd / 2 + 0.01]) {
-          const lit = worldRand() > 0.35;
-          const w = new THREE.Mesh(
-            new THREE.BoxGeometry(0.8, 1.2, 0.05),
-            lit ? winMat1 : winMat2,
-          );
-          w.position.set(bx + fx, fy, bz + fd);
-          this.scene.add(w);
+          const isLit = worldRand() > 0.35;
+          m4.makeTranslation(bx + fx, fy, bz + fd);
+          mats.push(m4.clone());
+          cols.push(isLit ? lit : dark);
         }
       }
     }
+    if (mats.length === 0) return;
+    const wins = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.8, 1.2, 0.05),
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      mats.length,
+    );
+    mats.forEach((mm, idx) => {
+      wins.setMatrixAt(idx, mm);
+      wins.setColorAt(idx, cols[idx]);
+    });
+    wins.instanceMatrix.needsUpdate = true;
+    if (wins.instanceColor) wins.instanceColor.needsUpdate = true;
+    wins.receiveShadow = false;
+    this.scene.add(wins);
   }
 
   async buildTrees(count: number) {
@@ -983,27 +1015,34 @@ const towerBox = new THREE.Box3();
   private buildCityStreets() {
     const mat = new THREE.MeshLambertMaterial({ color: 0x3d3d3d });
     const walkMat = new THREE.MeshLambertMaterial({ color: 0xb8b8b8 });
+    // ruas + calçadas em 2 InstancedMesh (1 por material)
+    const roadMats: THREE.Matrix4[] = [];
+    const walkMats: THREE.Matrix4[] = [];
+    const m4 = new THREE.Matrix4();
     for (let k = -1; k <= 1; k++) {
-      const v = new THREE.Mesh(new THREE.BoxGeometry(5, 0.1, 600), mat);
-      v.position.set(k * 400, 0.07, CITY.z);
-      v.receiveShadow = true;
-      this.scene.add(v);
-      const h = new THREE.Mesh(new THREE.BoxGeometry(600, 0.1, 5), mat);
-      h.position.set(CITY.x, 0.07, CITY.z + k * 400);
-      h.receiveShadow = true;
-      this.scene.add(h);
-      // calçadas dos dois lados
+      m4.makeTranslation(k * 400, 0.07, CITY.z);
+      roadMats.push(m4.clone());
+      m4.makeRotationY(Math.PI / 2);
+      m4.setPosition(CITY.x, 0.07, CITY.z + k * 400);
+      roadMats.push(m4.clone());
       for (const s of [-4, 4]) {
-        const sv = new THREE.Mesh(new THREE.BoxGeometry(3, 0.12, 600), walkMat);
-        sv.position.set(k * 400 + s, 0.12, CITY.z);
-        sv.receiveShadow = true;
-        this.scene.add(sv);
-        const sh = new THREE.Mesh(new THREE.BoxGeometry(600, 0.12, 3), walkMat);
-        sh.position.set(CITY.x, 0.12, CITY.z + k * 400 + s);
-        sh.receiveShadow = true;
-        this.scene.add(sh);
+        m4.makeTranslation(k * 400 + s, 0.12, CITY.z);
+        walkMats.push(m4.clone());
+        m4.makeRotationY(Math.PI / 2);
+        m4.setPosition(CITY.x, 0.12, CITY.z + k * 400 + s);
+        walkMats.push(m4.clone());
       }
     }
+    const roads = new THREE.InstancedMesh(new THREE.BoxGeometry(5, 0.1, 600), mat, roadMats.length);
+    roadMats.forEach((mm, idx) => roads.setMatrixAt(idx, mm));
+    roads.instanceMatrix.needsUpdate = true;
+    roads.receiveShadow = true;
+    this.scene.add(roads);
+    const walks = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 0.12, 600), walkMat, walkMats.length);
+    walkMats.forEach((mm, idx) => walks.setMatrixAt(idx, mm));
+    walks.instanceMatrix.needsUpdate = true;
+    walks.receiveShadow = true;
+    this.scene.add(walks);
   }
 
   buildDistricts() {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
-import { World, islandRadius, BALL, BRIDGE } from './world';
+import { World, islandRadius, BALL, BRIDGE, CITY } from './world';
 import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
@@ -95,7 +95,7 @@ constructor() {}
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 6000);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice() });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isTouchDevice() ? 1.5 : 2));
+    this.renderer.setPixelRatio(1);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -105,8 +105,8 @@ constructor() {}
     const dl = new THREE.DirectionalLight(0xfff5e0, 1.2);
     dl.position.set(50, 80, 30);
     dl.castShadow = true;
-    dl.shadow.mapSize.width = 2048;
-    dl.shadow.mapSize.height = 2048;
+    dl.shadow.mapSize.width = 1024;
+    dl.shadow.mapSize.height = 1024;
     dl.shadow.camera.left = -250;
     dl.shadow.camera.right = 250;
     dl.shadow.camera.top = 250;
@@ -976,13 +976,20 @@ constructor() {}
 
   private updateCamera() {
     const t = this.cow.group.position;
-    // neblina e alcance acompanham o zoom (de longe dá pra ver a ilha inteira)
+    // neblina e alcance acompanham o zoom (de longe dá pra ver a ilha inteira),
+    // mas na cidade usa curto pra cortar geometria (menos lag)
     const fog = this.scene.fog as THREE.Fog | null;
+    const inCity = Math.hypot(t.x - CITY.x, t.z - CITY.z) < CITY.r + 300;
     if (fog) {
-      fog.near = 800;
-      fog.far = Math.max(2500, this.camDist * 2.2);
+      if (inCity) {
+        fog.near = 200;
+        fog.far = 1200;
+      } else {
+        fog.near = 800;
+        fog.far = Math.max(2500, this.camDist * 2.2);
+      }
     }
-    const wantFar = Math.max(6000, this.camDist * 2.5 + 2000);
+    const wantFar = inCity ? 1500 : Math.max(6000, this.camDist * 2.5 + 2000);
     if (Math.abs(this.camera.far - wantFar) > 1) {
       this.camera.far = wantFar;
       this.camera.updateProjectionMatrix();

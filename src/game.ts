@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
-import { World, islandRadius, BALL, BRIDGE, CITY } from './world';
+import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN } from './world';
 import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
@@ -169,7 +169,7 @@ constructor() {}
     await this.world.buildGrass(3000);
     this.world.buildDistricts();
 
-    this.cow = new Cow(this.scene, this.physics, 0, 8);
+    this.cow = new Cow(this.scene, this.physics, SPAWN.x, SPAWN.z);
     (window as unknown as Record<string, unknown>).__game = this;
     this.npcFactory = new NPCFactory();
     for (let i = 0; i < 60; i++) {
@@ -179,7 +179,7 @@ constructor() {}
         const rr = Math.sqrt(worldRand()) * (islandRadius(th, true) - 14);
         const px = Math.cos(th) * rr;
         const pz = Math.sin(th) * rr;
-        if (Math.hypot(px, pz - 8) < 15) continue;
+        if (Math.hypot(px - SPAWN.x, pz - SPAWN.z) < 15) continue;
         x = px; z = pz; break;
       }
       this.npcs.push(this.npcFactory.create(this.scene, this.physics, x, z));
@@ -193,12 +193,17 @@ constructor() {}
       const gz = 850 + Math.sin(th) * rr;
       this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz, 'goat'));
     }
-    // trabalhadores da fazenda (ilha redonda)
+    // trabalhadores da fazenda (ilha redonda, longe do nascimento)
     for (let i = 0; i < 8; i++) {
-      const th = worldRand() * Math.PI * 2;
-      const rr = Math.sqrt(worldRand()) * 60;
-      this.npcs.push(this.npcFactory.create(
-        this.scene, this.physics, BALL.x + Math.cos(th) * rr, BALL.z + Math.sin(th) * rr));
+      let gx = BALL.x, gz = BALL.z;
+      for (let a = 0; a < 12; a++) {
+        const th = worldRand() * Math.PI * 2;
+        const rr = Math.sqrt(worldRand()) * 60;
+        gx = BALL.x + Math.cos(th) * rr;
+        gz = BALL.z + Math.sin(th) * rr;
+        if (Math.hypot(gx - SPAWN.x, gz - SPAWN.z) >= 12) break;
+      }
+      this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz));
     }
     loading(95, 'Criando NPCs...');
   }

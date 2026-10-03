@@ -98,7 +98,7 @@ export class RemoteCow {
     const label = this.makeLabel(name, color);
     label.position.y = 5.4;
     this.group.add(label);
-    this.target.set(0, 1.2, 8);
+    this.target.set(-40, 1.2, -1810);
     this.group.position.copy(this.target);
     scene.add(this.group);
     void this.loadModel();

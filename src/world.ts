@@ -102,6 +102,8 @@ export const BRIDGE = { x0: -4, x1: 4, z0: -1440, z1: -1080 };
 export const FARM = { x: 0, z: -1850, r: 60 };
 export const DAM_RECT = { x0: -440, x1: -80, z0: -520, z1: -320 };
 export const CITY = { x: 0, z: 150, r: 450 };
+/** Nascimento da vaca (pasto aberto da fazenda, longe das construções). */
+export const SPAWN = { x: -40, z: -1810 };
 export const MANSION = { x: 850, z: -100 };
 export const CEMETERY = { x: -150, z: 500, r: 25 };
 export const FOREST = { x: -800, z: 200, r: 150 };
@@ -1399,8 +1401,8 @@ const towerBox = new THREE.Box3();
         while (spots.length < 10 && guard++ < 100) {
           const th = worldRand() * Math.PI * 2;
           const rr = 8 + worldRand() * 17;
-          const x = Math.cos(th) * rr;
-          const z = 8 + Math.sin(th) * rr;
+          const x = SPAWN.x + Math.cos(th) * rr;
+          const z = SPAWN.z + Math.sin(th) * rr;
           if (Math.abs(x) < 7) continue;
           if (Math.abs(z) < 7) continue;
           spots.push({ x, z, sxz: 0.3 + worldRand() * 0.2, sy: 1.6 + worldRand() * 0.8, rot: worldRand() * Math.PI * 2 });
@@ -1522,6 +1524,7 @@ const towerBox = new THREE.Box3();
       const hx = (worldRand() - 0.5) * 160;
       const hz = -1850 + (worldRand() - 0.5) * 160;
       if (!this.isOnIsland(hx, hz, 3)) continue;
+      if (Math.hypot(hx - SPAWN.x, hz - SPAWN.z) < 6) continue;
       if (Math.hypot(hx + 100, hz + 1900) < 15 || Math.hypot(hx - 80, hz + 1940) < 10) continue;
       const hay = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1.5, 10), hayMat);
       hay.rotation.z = Math.PI / 2;

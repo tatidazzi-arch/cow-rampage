@@ -245,9 +245,32 @@ export class NetManager {
   private eventAction: { send: (e: NetEventMsg) => Promise<void> } | null = null;
   private profiles = new Map<string, PlayerProfile & { score: number }>();
   private helloTimer = 0;
+  private maxSeen = 1;
+  private aloneSince = 0;
 
   private sendHello(): void {
     this.helloAction?.send({ name: this.myName, color: this.myColor, skin: this.mySkin }).catch(() => {});
+  }
+
+  /** Força reanúncio (ex.: ao voltar pra aba no celular). */
+  poke(): void {
+    if (!this.room) return;
+    this.sendHello();
+    if (this.onPeers) this.onPeers();
+  }
+
+  /** Aviso quando já viu gente e ficou sozinho (conexão caiu?). */
+  dropHint(): string {
+    const n = this.profiles.size + 1;
+    if (n > 1) {
+      this.maxSeen = Math.max(this.maxSeen, n);
+      this.aloneSince = 0;
+      return '';
+    }
+    if (this.maxSeen < 2) return '';
+    if (!this.aloneSince) this.aloneSince = Date.now();
+    if (Date.now() - this.aloneSince < 20000) return '';
+    return '⚠️ Conexão caiu? Toque em 🔄 RECONECTAR.';
   }
 
   get id(): string {
@@ -263,12 +286,16 @@ export class NetManager {
     return Object.keys(this.room.getPeers()).length + 1;
   }
 
-  join(code: string, name: string, color: number): void {
-    void this.leave();
+  async join(code: string, name: string, color: number): Promise<void> {
+    // espera o teardown da sala anterior COMPLETAR antes de abrir a nova:
+    // sair+entrar sobrepostos vazam ofertas mortas e a nova sala nunca conecta
+    await this.leave();
     this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
     this.myName = name.trim().slice(0, 12) || 'Jimmy';
     this.myColor = color;
     this.profiles.clear();
+    this.maxSeen = 1;
+    this.aloneSince = 0;
     this.room = joinRoom({ appId: APP_ID }, 'cow-' + this.roomCode);
 
     const cowAction = this.room.makeAction<CowNetState>('cow');
@@ -283,6 +310,7 @@ export class NetManager {
     };
     helloAction.onMessage = (p, ctx) => {
       this.profiles.set(ctx.peerId, { name: p.name, color: p.color, skin: typeof p.skin === 'string' ? p.skin : 'comum', score: 0 });
+      this.maxSeen = Math.max(this.maxSeen, this.profiles.size + 1);
       this.sendHello();
       if (this.onPeers) this.onPeers();
     };
@@ -374,6 +402,8 @@ export class NetManager {
     window.clearInterval(this.helloTimer);
     this.helloTimer = 0;
     this.profiles.clear();
+    this.maxSeen = 1;
+    this.aloneSince = 0;
     if (this.room) {
       const r = this.room;
       this.room = null;

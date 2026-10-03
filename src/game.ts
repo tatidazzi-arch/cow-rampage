@@ -152,6 +152,10 @@ constructor() {}
     document.addEventListener('click', () => {
       if (this.started && !this.input.mouseLocked) this.input.requestLock();
     });
+    // voltou pra aba (celular suspende tudo): reanuncia presença na hora
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.net.connected) this.net.poke();
+    });
   }
 
   private async buildWorld(loading: (pct: number, label: string) => void) {
@@ -292,6 +296,7 @@ constructor() {}
         <button id="netJoin">ENTRAR NA SALA</button>
         <div id="netplayerlist"></div>
         <button id="netPlay" style="display:none">JOGAR ONLINE</button>
+        <button id="netRetry" style="display:none">🔄 RECONECTAR</button>
         <button id="netBack">VOLTAR</button>
       </div>
     `;
@@ -321,6 +326,10 @@ constructor() {}
       this.closeNetMenu();
     });
     document.getElementById('netJoin')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.joinNetRoom();
+    });
+    document.getElementById('netRetry')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.joinNetRoom();
     });
@@ -448,23 +457,32 @@ constructor() {}
     if (netPlay) netPlay.style.display = 'none';
   }
 
-  private joinNetRoom() {
-    const name = (document.getElementById('netName') as HTMLInputElement).value;
-    const code = (document.getElementById('netRoom') as HTMLInputElement).value;
-    const err = document.getElementById('netError')!;
-    if (!code.trim()) {
-      err.textContent = 'Digite o código da sala!';
+  private joining = false;
+
+  private async joinNetRoom() {
+    if (this.joining) return;
+    const nameEl = document.getElementById('netName') as HTMLInputElement;
+    const codeEl = document.getElementById('netRoom') as HTMLInputElement;
+    if (!codeEl.value.trim() && !this.net.roomCode) {
+      document.getElementById('netError')!.textContent = 'Digite o código da sala!';
       return;
     }
+    const name = nameEl.value;
+    const code = codeEl.value.trim() || this.net.roomCode;
+    const err = document.getElementById('netError')!;
+    this.joining = true;
     try {
-      this.net.join(code, name || 'Jimmy', this.net.myColor);
+      await this.net.join(code, name || 'Jimmy', this.net.myColor);
       // atualiza a lista ao vivo (antes mesmo de clicar JOGAR)
       this.net.onPeers = () => this.renderNetList();
       document.getElementById('netPlay')!.style.display = 'block';
+      document.getElementById('netRetry')!.style.display = 'block';
       err.textContent = 'Sala: ' + this.net.roomCode + ' — chame os amigos!';
       this.renderNetList();
     } catch {
       err.textContent = 'Falha ao entrar. Tente de novo.';
+    } finally {
+      this.joining = false;
     }
   }
 
@@ -484,6 +502,8 @@ constructor() {}
     } else {
       html += '<div style="color:#7fff7f">✅ Conectado! Cliquem JOGAR ONLINE nos dois.</div>';
     }
+    const hint = this.net.dropHint();
+    if (hint) html += `<div style="color:#ff8855">${hint}</div>`;
     el.innerHTML = html;
   }
 
@@ -565,6 +585,8 @@ constructor() {}
     this.netActive = false;
     document.getElementById('leaveBtn')!.style.display = 'none';
     document.getElementById('scores')!.style.display = 'none';
+    document.getElementById('netPlay')!.style.display = 'none';
+    document.getElementById('netRetry')!.style.display = 'none';
     this.showMessage('Saiu da sala.');
   }
 
@@ -617,6 +639,8 @@ constructor() {}
         sb.innerHTML = '<b>🏆 Sala ' + this.net.roomCode + ' 🌐' + board.length + '</b><br>' + board
           .map((p) => `<span style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}: ${p.score}</span>`)
           .join('<br>');
+        const hint = this.net.dropHint();
+        if (hint) sb.innerHTML += `<br><span style="font-size:12px;color:#ff8855">${hint}</span>`;
       } else {
         sb.style.display = 'none';
       }

@@ -131,6 +131,14 @@ constructor() {}
   private setupInput() {
     this.input = new Input(this.renderer.domElement);
     setupTouchControls(this.input, () => this.started);
+    this.input.onPadMenu = () => {
+      if (this.started) this.exitToMenu();
+    };
+    this.input.onPadStatus = (connected) => {
+      if (connected && this.started) {
+        this.showMessage('🎮 Controle conectado! Bola=pular, R1=cabeçada (sem X!)');
+      }
+    };
     this.input.onLockError = () => {
       this.showMessage('Mouse recusado: clique de novo ou arraste pra olhar');
     };
@@ -196,7 +204,7 @@ constructor() {}
     hud.id = 'hud';
     hud.style.display = 'none';
     hud.innerHTML = `
-      <div>🪙 DINCOW: <span id="score">0</span></div>
+      <div>🪙 DINCOW: <span id="score">0</span> <span id="padstat"></span></div>
       <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
       <div id="carry-status"></div>
       <button id="menuBtn">MENU</button>
@@ -490,6 +498,11 @@ constructor() {}
     document.getElementById('controls')!.style.display = 'block';
     document.getElementById('mission')!.style.display = 'block';
     this.started = true;
+    // teclado/controle/touch limpos ao começar
+    this.input.keys = {};
+    this.input.joyF = 0;
+    this.input.joyS = 0;
+    this.input.takePadDelta();
     this.netActive = multiplayer && this.net.connected;
     // skin escolhida na loja (vale pra vaca local e pros amigos verem)
     const mySkin = getSelectedId();
@@ -541,6 +554,7 @@ constructor() {}
           this.cow.body.applyImpulse({ x: push.x, y: 80, z: push.z }, true);
           this.showMessage(fromName + ' te deu CABECADA!');
           this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
+          this.input.rumble(1, 0.7, 300);
         }
       };
     }
@@ -568,6 +582,8 @@ constructor() {}
 
   private updateHUD() {
     document.getElementById('score')!.textContent = String(this.score);
+    const padstat = document.getElementById('padstat');
+    if (padstat) padstat.textContent = this.input.padConnected ? '🎮' : '';
     // tudo que ganhou vira DINCOW na carteira (persistente, gasta na loja)
     const gain = this.score - this.lastScore;
     if (gain > 0) addDincow(gain);
@@ -766,6 +782,7 @@ constructor() {}
         if (this.netActive) this.net.sendBoom('CABECADA!', t.x, t.y + 1, t.z);
         this.showMessage('CABECADA!');
         this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
+        this.input.rumble(1, 0.5, 200);
       }
     }
     // PvP: cabeçada pega nas vacas dos amigos (hitbox = raio 5 na posição sincronizada)
@@ -780,6 +797,7 @@ constructor() {}
           this.missions.event('headbutt');
           this.showMessage('CABECADA no ' + rc.name + '!');
           this.spawnParticles(rc.target.x, rc.target.y + 1, rc.target.z, 8, 0xff4444);
+          this.input.rumble(1, 0.5, 200);
         }
       }
     }
@@ -1119,6 +1137,7 @@ constructor() {}
   private update(dt: number) {
     if (!this.started) return;
     this.input.syncLock();
+    this.input.pollGamepad();
     // timestep fixo: fisica em tempo real mesmo com fps baixo
     this.physAcc += dt;
     let steps = 0;
@@ -1134,6 +1153,12 @@ constructor() {}
     if (this.input.mouseLocked || this.input.mouseDown || this.input.isTouch) {
       this.camYaw += md.x * 0.003;
       this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003));
+    }
+    // olhar pelo analógico direito do controle
+    const pd = this.input.takePadDelta();
+    if (pd.x !== 0 || pd.y !== 0) {
+      this.camYaw += pd.x * 0.003;
+      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - pd.y * 0.003));
     }
     const wd = this.input.takeWheelDelta();
     if (wd !== 0) {

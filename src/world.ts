@@ -919,32 +919,24 @@ const towerBox = new THREE.Box3();
 
   private treeNeedsDecimate = false;
 
-  /** Acer do pack do usuário (GLB leve com cor por vértice). */
+  /** Acer do pack do usuário (tronco marrom + copa verde). */
   private async loadAcerModel(): Promise<THREE.Object3D> {
     const gltf = await new GLTFLoader().loadAsync('models/tree/acer.glb');
     const model = gltf.scene;
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2f });
+    const leafMat = new THREE.MeshLambertMaterial({ color: 0x3f7a2a, side: THREE.DoubleSide });
     let verts = 0;
     model.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
-      m.material = mat;
+      m.material = m.name === 'trunk' ? trunkMat : leafMat;
       m.castShadow = true;
       const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
       if (pos) verts += pos.count;
       this.treeInfo.meshes++;
     });
-    // miolo sólido escuro: preenche os vãos da folhagem rala (a copa é vazada)
-    const core = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 10, 8),
-      new THREE.MeshLambertMaterial({ color: 0x2a551d }),
-    );
-    core.scale.set(0.12, 0.24, 0.12);
-    core.position.set(0, 0.52, 0);
-    core.castShadow = true;
-    model.add(core);
     this.treeInfo.verts = verts;
-    this.treeInfo.mats = ['acer-vertex'];
+    this.treeInfo.mats = ['acer-trunk', 'acer-leaf'];
     this.treeNeedsDecimate = false;
     return model;
   }

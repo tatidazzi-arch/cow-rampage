@@ -6,20 +6,6 @@ import { skinById, tintCowModel } from './skins';
 
 const APP_ID = 'cow-rampage-3d-v1';
 
-/** TURN público gratuito (OpenRelay) — ajuda a conectar através de NATs
- *  restritivos onde o P2P direto (STUN) não passa. Sem conta nem chave. */
-const TURN_SERVERS = [
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-];
-
 export interface CowNetState {
   [key: string]: number | string | boolean;
   x: number;
@@ -283,7 +269,7 @@ export class NetManager {
     this.myName = name.trim().slice(0, 12) || 'Jimmy';
     this.myColor = color;
     this.profiles.clear();
-    this.room = joinRoom({ appId: APP_ID, turnConfig: TURN_SERVERS }, 'cow-' + this.roomCode);
+    this.room = joinRoom({ appId: APP_ID }, 'cow-' + this.roomCode);
 
     const cowAction = this.room.makeAction<CowNetState>('cow');
     const helloAction = this.room.makeAction<PlayerProfile>('hello');

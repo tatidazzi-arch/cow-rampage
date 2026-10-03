@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { joinRoom, selfId, getRelaySockets } from '@trystero-p2p/torrent';
 import type { Room } from '@trystero-p2p/torrent';
 import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
+import { skinById, tintCowModel } from './skins';
 
 const APP_ID = 'cow-rampage-3d-v1';
 
@@ -35,6 +36,7 @@ export interface PlayerProfile {
   [key: string]: number | string | boolean;
   name: string;
   color: number;
+  skin: string;
 }
 
 export interface NetEventMsg {
@@ -62,6 +64,7 @@ export class RemoteCow {
   name: string;
   color: number;
   score = 0;
+  skinId = 'comum';
   target = new THREE.Vector3();
   targetYaw = 0;
   modelReady = false;
@@ -74,9 +77,10 @@ export class RemoteCow {
   private legT = 0;
   private legs: THREE.Mesh[] = [];
 
-  constructor(scene: THREE.Scene, name: string, color: number) {
+  constructor(scene: THREE.Scene, name: string, color: number, skinId = 'comum') {
     this.name = name;
     this.color = color;
+    this.skinId = skinId;
     const fur = new THREE.MeshLambertMaterial({ color: 0xebe6dc });
     const band = new THREE.MeshLambertMaterial({ color });
     const dark = new THREE.MeshLambertMaterial({ color: 0x4b3723 });
@@ -128,6 +132,7 @@ export class RemoteCow {
       blanket.position.set(0, 3.1, -0.2);
       this.group.add(blanket);
       this.fallback.visible = false;
+      tintCowModel(spawned.model, skinById(this.skinId).tint);
       this.mixer = spawned.mixer;
       this.clips = spawned.clips;
       this.modelReady = true;
@@ -135,6 +140,13 @@ export class RemoteCow {
     } catch {
       /* mantém a vaca de caixa */
     }
+  }
+
+  /** Troca a skin depois de criada (ex.: hello com a skin chegou depois). */
+  setSkin(skinId: string): void {
+    if (!skinId || skinId === this.skinId) return;
+    this.skinId = skinId;
+    if (this.modelReady) tintCowModel(this.group, skinById(skinId).tint);
   }
 
   private playClip(name: string): void {
@@ -237,6 +249,7 @@ export class NetManager {
   roomCode = '';
   myName = 'Jimmy';
   myColor = 0xffcc00;
+  mySkin = 'comum';
   onEvent: ((e: NetEventMsg, fromName: string) => void) | null = null;
   onPeers: (() => void) | null = null;
   onRemoteLeave: ((peerId: string) => void) | null = null;
@@ -248,7 +261,7 @@ export class NetManager {
   private helloTimer = 0;
 
   private sendHello(): void {
-    this.helloAction?.send({ name: this.myName, color: this.myColor }).catch(() => {});
+    this.helloAction?.send({ name: this.myName, color: this.myColor, skin: this.mySkin }).catch(() => {});
   }
 
   get id(): string {
@@ -283,7 +296,7 @@ export class NetManager {
       if (this.handleCow) this.handleCow(s, ctx.peerId);
     };
     helloAction.onMessage = (p, ctx) => {
-      this.profiles.set(ctx.peerId, { name: p.name, color: p.color, score: 0 });
+      this.profiles.set(ctx.peerId, { name: p.name, color: p.color, skin: typeof p.skin === 'string' ? p.skin : 'comum', score: 0 });
       this.sendHello();
       if (this.onPeers) this.onPeers();
     };

@@ -10,6 +10,10 @@ import { NetManager, RemoteCow } from './net';
 import type { CowNetState } from './net';
 import { worldRand } from './rng';
 import { COW_HALF_H } from './cowmodel';
+import {
+  SKINS, addDincow, addOwned, getOwned, getSelectedId, getWallet,
+  setSelectedId, skinById, spendDincow,
+} from './skins';
 import { isTouchDevice, setupTouchControls } from './touch';
 
 export class Game {
@@ -29,6 +33,7 @@ export class Game {
   private netAcc = 0;
 
   private score = 0;
+  private lastScore = 0;
   private chaos = 0;
   private carrying: NPCPhysics | null = null;
   private camDist = 16;
@@ -191,11 +196,16 @@ constructor() {}
     hud.id = 'hud';
     hud.style.display = 'none';
     hud.innerHTML = `
-      <div>Score: <span id="score">0</span></div>
+      <div>🪙 DINCOW: <span id="score">0</span></div>
       <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
       <div id="carry-status"></div>
+      <button id="menuBtn">MENU</button>
     `;
     document.body.appendChild(hud);
+    document.getElementById('menuBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.exitToMenu();
+    });
 
     const controls = document.createElement('div');
     controls.id = 'controls';
@@ -237,8 +247,8 @@ constructor() {}
       const p = this.cow.group.position;
       this.spawnParticles(p.x, p.y + 2, p.z, 20, 0xffcc32);
       this.showMessage(next
-        ? `+${done.reward} pts! Nova: ${next.title}`
-        : `+${done.reward} pts! TODAS COMPLETAS 🏆`);
+        ? `+${done.reward} DINCOW! Nova: ${next.title}`
+        : `+${done.reward} DINCOW! TODAS COMPLETAS 🏆`);
     };
 
     const start = document.createElement('div');
@@ -258,6 +268,15 @@ constructor() {}
         <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
         <button id="playBtn">1 JOGADOR</button>
         <button id="netBtn">MULTIPLAYER</button>
+        <button id="skinBtn">SKINS 🐄</button>
+      </div>
+      <div id="skinmenu" style="display:none">
+        <h1>SKINS</h1>
+        <p>Compre com DINCOW 🪙 (ganha jogando, saldo salvo)</p>
+        <div id="skinwallet"></div>
+        <div id="skinlist"></div>
+        <div id="skinError"></div>
+        <button id="skinBack">VOLTAR</button>
       </div>
       <div id="netmenu" style="display:none">
         <h1>MULTIPLAYER</h1>
@@ -284,6 +303,14 @@ constructor() {}
     document.getElementById('netBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.openNetMenu();
+    });
+    document.getElementById('skinBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openSkinMenu();
+    });
+    document.getElementById('skinBack')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeSkinMenu();
     });
     document.getElementById('netBack')!.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -333,12 +360,88 @@ constructor() {}
     if (!nameEl.value) nameEl.value = 'Vaca-' + Math.floor(1000 + Math.random() * 9000);
     const palette = [0xff5555, 0x55aaff, 0x55dd55, 0xffcc00, 0xcc66ff, 0xff8800];
     this.net.myColor = palette[Math.floor(Math.random() * palette.length)];
+    this.net.mySkin = getSelectedId();
     this.renderNetList();
   }
 
   private closeNetMenu() {
     document.getElementById('netmenu')!.style.display = 'none';
     document.getElementById('gamemenu')!.style.display = 'flex';
+  }
+
+  private openSkinMenu() {
+    document.getElementById('gamemenu')!.style.display = 'none';
+    document.getElementById('skinmenu')!.style.display = 'flex';
+    this.renderSkins();
+  }
+
+  private closeSkinMenu() {
+    document.getElementById('skinmenu')!.style.display = 'none';
+    document.getElementById('gamemenu')!.style.display = 'flex';
+  }
+
+  private renderSkins() {
+    const listEl = document.getElementById('skinlist');
+    const walletEl = document.getElementById('skinwallet');
+    const errEl = document.getElementById('skinError');
+    if (!listEl || !walletEl) return;
+    if (errEl) errEl.textContent = '';
+    const wallet = getWallet();
+    const owned = getOwned();
+    const selected = getSelectedId();
+    walletEl.textContent = `🪙 Carteira: ${wallet} DINCOW`;
+    listEl.innerHTML = SKINS.map((s) => {
+      const has = owned.includes(s.id);
+      const sel = selected === s.id;
+      const btn = sel
+        ? '<span class="sel">EM USO ✅</span>'
+        : has
+          ? `<button data-sel="${s.id}">USAR</button>`
+          : `<button data-buy="${s.id}">🪙 ${s.price}</button>`;
+      return `<div class="skinrow"><span class="swatch" style="background:#${s.tint.toString(16).padStart(6, '0')}"></span><span class="sname">${s.name}</span>${btn}</div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-buy]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = (b as HTMLElement).dataset['buy'] ?? '';
+        const skin = skinById(id);
+        if (!spendDincow(skin.price)) {
+          if (errEl) errEl.textContent = 'DINCOW insuficiente! Jogue pra ganhar 🪙';
+          return;
+        }
+        addOwned(id);
+        setSelectedId(id);
+        this.renderSkins();
+      });
+    });
+    listEl.querySelectorAll('[data-sel]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setSelectedId((b as HTMLElement).dataset['sel'] ?? 'comum');
+        this.renderSkins();
+      });
+    });
+  }
+
+  /** Volta pro menu (sai da sala se estiver online). */
+  private exitToMenu() {
+    if (this.netActive) this.leaveNet();
+    this.started = false;
+    if (document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch { /* ignora */ }
+    }
+    for (const id of ['hud', 'controls', 'mission', 'scores', 'leaveBtn', 'touchui', 'mousehint']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
+    const start = document.getElementById('start');
+    if (start) start.style.display = 'flex';
+    document.getElementById('gamemenu')!.style.display = 'flex';
+    document.getElementById('netmenu')!.style.display = 'none';
+    const netPlay = document.getElementById('netPlay');
+    if (netPlay) netPlay.style.display = 'none';
   }
 
   private joinNetRoom() {
@@ -388,19 +491,25 @@ constructor() {}
     document.getElementById('mission')!.style.display = 'block';
     this.started = true;
     this.netActive = multiplayer && this.net.connected;
+    // skin escolhida na loja (vale pra vaca local e pros amigos verem)
+    const mySkin = getSelectedId();
+    this.cow.setSkinTint(skinById(mySkin).tint);
+    this.net.mySkin = mySkin;
     if (this.netActive) {
       document.getElementById('leaveBtn')!.style.display = 'block';
       this.net.onCowState((s: CowNetState, peerId: string) => {
         let rc = this.remoteCows.get(peerId);
         if (!rc) {
           const prof = this.net.profileOf(peerId);
-          rc = new RemoteCow(this.scene, prof ? prof.name : '?', prof ? prof.color : 0xffffff);
+          rc = new RemoteCow(this.scene, prof ? prof.name : '?', prof ? prof.color : 0xffffff, prof && typeof prof.skin === 'string' ? prof.skin : 'comum');
           rc.group.position.set(s.x, s.y - COW_HALF_H, s.z);
           rc.target.set(s.x, s.y - COW_HALF_H, s.z);
           this.remoteCows.set(peerId, rc);
           this.showMessage((prof ? prof.name : 'Alguém') + ' entrou! 🐄');
         }
         rc.setState(s);
+        const prof2 = this.net.profileOf(peerId);
+        if (prof2 && typeof prof2.skin === 'string') rc.setSkin(prof2.skin);
         this.net.updateScore(peerId, s.score);
       });
       this.net.onRemoteLeave = (peerId: string) => {
@@ -459,6 +568,10 @@ constructor() {}
 
   private updateHUD() {
     document.getElementById('score')!.textContent = String(this.score);
+    // tudo que ganhou vira DINCOW na carteira (persistente, gasta na loja)
+    const gain = this.score - this.lastScore;
+    if (gain > 0) addDincow(gain);
+    this.lastScore = this.score;
     const fill = document.getElementById('chaos-fill');
     if (fill) fill.style.width = this.chaos + '%';
     document.getElementById('chaos-pct')!.textContent = Math.round(this.chaos) + '%';

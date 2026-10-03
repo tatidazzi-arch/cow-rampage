@@ -223,10 +223,6 @@ constructor() {}
       : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
     document.body.appendChild(controls);
 
-    const msg = document.createElement('div');
-    msg.id = 'msg';
-    document.body.appendChild(msg);
-
     const mousehint = document.createElement('div');
     mousehint.id = 'mousehint';
     mousehint.textContent = 'Clique na tela para ativar o mouse (arrastar tambem olha)';
@@ -572,12 +568,8 @@ constructor() {}
     this.showMessage('Saiu da sala.');
   }
 
-  private showMessage(text: string) {
-    const el = document.getElementById('msg');
-    if (!el) return;
-    el.textContent = text;
-    el.style.opacity = '1';
-    window.setTimeout(() => { el.style.opacity = '0'; }, 1500);
+  private showMessage(_text: string) {
+    // popup do centro da tela removido (atrapalhava a visão)
   }
 
   private updateHUD() {
@@ -1154,11 +1146,11 @@ constructor() {}
       this.camYaw += md.x * 0.003;
       this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003));
     }
-    // olhar pelo analógico direito do controle
+    // olhar pelo analógico direito do controle (girar: invertido do arrasto)
     const pd = this.input.takePadDelta();
     if (pd.x !== 0 || pd.y !== 0) {
-      this.camYaw += pd.x * 0.003;
-      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - pd.y * 0.003));
+      this.camYaw -= pd.x * 0.003;
+      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch + pd.y * 0.003));
     }
     const wd = this.input.takeWheelDelta();
     if (wd !== 0) {

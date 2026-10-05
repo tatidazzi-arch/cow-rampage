@@ -240,8 +240,8 @@ constructor() {}
       const gz = 850 + Math.sin(th) * rr;
       placeNPC(gx, gz, 'goat');
     }
-    // trabalhadores da fazenda (ilha redonda, longe do nascimento)
-    for (let i = 0; i < 20; i++) {
+    // trabalhadores da fazenda (poucos: spawn tranquilo)
+    for (let i = 0; i < 6; i++) {
       let gx = BALL.x, gz = BALL.z;
       for (let a = 0; a < 12; a++) {
         const th = worldRand() * Math.PI * 2;

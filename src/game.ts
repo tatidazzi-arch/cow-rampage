@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
 import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN, MINE, MANSION } from './world';
@@ -102,6 +103,14 @@ constructor() {}
     this.renderer = new THREE.WebGLRenderer({ antialias: !isTouchDevice() });
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // reflexos pro metal (vaca de ouro): ambiente leve, 1x só
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    } catch {
+      /* sem reflexos */
+    }
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     document.body.appendChild(this.renderer.domElement);
@@ -574,7 +583,7 @@ constructor() {}
     this.netActive = multiplayer && this.net.connected;
     // skin escolhida na loja (vale pra vaca local e pros amigos verem)
     const mySkin = getSelectedId();
-    this.cow.setSkinTint(skinById(mySkin).tint);
+    this.cow.setSkin(skinById(mySkin));
     this.net.mySkin = mySkin;
     if (this.netActive) {
       document.getElementById('leaveBtn')!.style.display = 'block';

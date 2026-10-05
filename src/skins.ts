@@ -7,6 +7,10 @@ export interface Skin {
   price: number;
   /** matiz multiplicada na textura da vaca */
   tint: number;
+  /** metalness/roughness/env (só a de ouro usa) */
+  metal?: number;
+  rough?: number;
+  env?: number;
 }
 
 export const SKINS: Skin[] = [
@@ -14,7 +18,7 @@ export const SKINS: Skin[] = [
   { id: 'preta', name: 'Vaca Sombria', price: 150, tint: 0x777788 },
   { id: 'rosa', name: 'Vaca Morango', price: 250, tint: 0xff9ecf },
   { id: 'zumbi', name: 'Vaca Zumbi', price: 300, tint: 0x86d986 },
-  { id: 'ouro', name: 'Vaca de Ouro', price: 400, tint: 0xffd24a },
+  { id: 'ouro', name: 'Vaca de Ouro', price: 400, tint: 0xffd24a, metal: 0.95, rough: 0.15, env: 1.6 },
 ];
 
 const OWNED_KEY = 'cowrampage.skins.owned';
@@ -96,7 +100,7 @@ export function spendDincow(n: number): boolean {
 }
 
 /** Tinta o modelo FBX (clona materiais pra não vazar pros outros). */
-export function tintCowModel(root: THREE.Object3D, tint: number): void {
+export function tintCowModel(root: THREE.Object3D, skin: Skin): void {
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
@@ -106,6 +110,10 @@ export function tintCowModel(root: THREE.Object3D, tint: number): void {
       sm.material = (sm.material as THREE.Material).clone();
       sm.userData['tinted'] = true;
     }
-    (sm.material as THREE.MeshStandardMaterial).color.set(tint);
+    const mat = sm.material as THREE.MeshStandardMaterial;
+    mat.color.set(skin.tint);
+    mat.metalness = skin.metal ?? 0;
+    mat.roughness = skin.rough ?? 1;
+    mat.envMapIntensity = skin.env ?? 1;
   });
 }

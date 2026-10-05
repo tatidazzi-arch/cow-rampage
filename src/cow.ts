@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { COW_SCALE, loadCowAssets, spawnCowModel } from './cowmodel';
 import { tintCowModel } from './skins';
+import type { Skin } from './skins';
 
 export { COW_SCALE };
 /** Metade da altura do collider (pes ficam em center - HALF_H). */
@@ -25,7 +26,7 @@ export class Cow {
   private mixer: THREE.AnimationMixer | null = null;
   private clips: Record<string, THREE.AnimationClip> = {};
   private currentClip = '';
-  private skinTint = 0xffffff;
+  private skin: Skin = { id: 'comum', name: '', price: 0, tint: 0xffffff };
 
   constructor(scene: THREE.Scene, world: RAPIER.World, spawnX = 0, spawnZ = 0) {
     this.group = new THREE.Group();
@@ -64,7 +65,7 @@ export class Cow {
       this.mixer = spawned.mixer;
       this.clips = spawned.clips;
       this.modelReady = true;
-      tintCowModel(spawned.model, this.skinTint);
+      tintCowModel(spawned.model, this.skin);
       this.playClip('idle', 1);
     } catch (err) {
       console.warn('Modelo FBX da vaca nao carregou, usando procedural:', err);
@@ -72,9 +73,9 @@ export class Cow {
   }
 
   /** Aplica a skin (tinta o FBX; se ainda não carregou, vale quando chegar). */
-  setSkinTint(tint: number): void {
-    this.skinTint = tint;
-    if (this.modelReady) tintCowModel(this.group, tint);
+  setSkin(skin: Skin): void {
+    this.skin = skin;
+    if (this.modelReady) tintCowModel(this.group, skin);
   }
 
   private playClip(name: string, timeScale: number): void {

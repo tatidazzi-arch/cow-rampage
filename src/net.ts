@@ -118,7 +118,7 @@ export class RemoteCow {
       blanket.position.set(0, 3.1, -0.2);
       this.group.add(blanket);
       this.fallback.visible = false;
-      tintCowModel(spawned.model, skinById(this.skinId).tint);
+      tintCowModel(spawned.model, skinById(this.skinId));
       this.mixer = spawned.mixer;
       this.clips = spawned.clips;
       this.modelReady = true;
@@ -132,7 +132,7 @@ export class RemoteCow {
   setSkin(skinId: string): void {
     if (!skinId || skinId === this.skinId) return;
     this.skinId = skinId;
-    if (this.modelReady) tintCowModel(this.group, skinById(skinId).tint);
+    if (this.modelReady) tintCowModel(this.group, skinById(skinId));
   }
 
   private playClip(name: string): void {

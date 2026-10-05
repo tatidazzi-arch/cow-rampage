@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { worldRand } from './rng';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon';
 
@@ -43,6 +44,15 @@ export class NPCFactory {
   private businessLoading: Promise<void> | null = null;
   readonly businessInfo = { loaded: false, facing: '?', postFacing: '?' };
 
+  // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
+  private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
+  private static sharedSuitMat: THREE.MeshStandardMaterial | null = null;
+  private static sharedHairMat: THREE.MeshLambertMaterial | null = null;
+  private static mergedSuitGeo: THREE.BufferGeometry | null = null;
+  private static mergedWigGeo: THREE.BufferGeometry | null = null;
+  private static mergedWigPos = new THREE.Vector3();
+  private static mergedWigScaleY = 0.85;
+
   create(scene: THREE.Scene, world: RAPIER.World, x: number, z: number, forceKind?: 'normal' | 'business' | 'goat'): NPCPhysics {
     const id = this.idCounter++;
     const shirt = worldRand() < 0.35
@@ -54,6 +64,7 @@ export class NPCFactory {
 
     const npcKind = forceKind ?? (id % 4 === 1 ? 'business' : 'normal');
     const mesh = npcKind === 'goat' ? this.buildGoatMesh() : this.buildMesh(shirt, skin, hair, pants);
+    this.mergeProcedural(mesh);
     mesh.position.set(x, 0, z);
     scene.add(mesh);
 
@@ -94,7 +105,42 @@ export class NPCFactory {
     return npc;
   }
 
-  /** Garante UMA carga do FBX business; quem chamar recebe o swap quando pronto. */
+  /** Funde as partes procedurais em 1 mesh (cor por vértice, 1 material global). */
+  private mergeProcedural(group: THREE.Group): void {
+    if (!NPCFactory.sharedVertexMat) {
+      NPCFactory.sharedVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    }
+    group.updateMatrixWorld(true);
+    const geos: THREE.BufferGeometry[] = [];
+    group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mat = m.material as THREE.MeshLambertMaterial | undefined;
+      const color = mat && mat.color ? mat.color as THREE.Color : new THREE.Color(0xffffff);
+      const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+      const pos = g.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const arr = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        arr[i * 3] = color.r;
+        arr[i * 3 + 1] = color.g;
+        arr[i * 3 + 2] = color.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      geos.push(g);
+    });
+    for (const child of [...group.children]) group.remove(child);
+    if (geos.length === 0) return;
+    const merged = mergeGeometries(geos, false);
+    if (!merged) {
+      console.warn('mergeProcedural falhou, mantendo partes');
+      return;
+    }
+    const mesh = new THREE.Mesh(merged, NPCFactory.sharedVertexMat);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    group.add(mesh);
+  }
   private ensureBusiness(npc: NPCPhysics): void {
     if (this.businessTemplate) {
       this.applyBusiness(npc);
@@ -123,6 +169,7 @@ export class NPCFactory {
       roughness: 0.85,
       metalness: 0.0,
     });
+    NPCFactory.sharedSuitMat = mat;
     model.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) {
@@ -193,10 +240,13 @@ export class NPCFactory {
             rr = Math.max(rr, Math.hypot(v.x - cx, v.z - cz));
           }
         });
+        const wigMat = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
+        NPCFactory.sharedHairMat = wigMat;
         const wig = new THREE.Mesh(new THREE.SphereGeometry(rr * 1.25, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
-          new THREE.MeshLambertMaterial({ color: 0x3a2a1a }));
+          wigMat);
         wig.position.set(cx, top - rr * 0.5, cz);
         wig.scale.y = 0.85;
+        wig.userData['isWig'] = true;
         wrap.add(wig);
       }
     }
@@ -240,11 +290,57 @@ export class NPCFactory {
   private applyBusiness(npc: NPCPhysics): void {
     if (!this.businessTemplate || npc.kind !== 'business') return;
     if (npc.mesh.userData['isBusiness']) return;
+    // terno fundido compartilhado (1 draw) + peruca compartilhada
+    if (!NPCFactory.mergedSuitGeo) this.buildMergedBusiness();
     for (const child of [...npc.mesh.children]) {
       npc.mesh.remove(child);
     }
-    npc.mesh.add(this.businessTemplate.clone(true));
+    if (NPCFactory.mergedSuitGeo && NPCFactory.sharedSuitMat) {
+      const suit = new THREE.Mesh(NPCFactory.mergedSuitGeo, NPCFactory.sharedSuitMat);
+      suit.castShadow = false;
+      suit.receiveShadow = false;
+      npc.mesh.add(suit);
+    } else {
+      npc.mesh.add(this.businessTemplate.clone(true));
+    }
+    if (NPCFactory.mergedWigGeo && NPCFactory.sharedHairMat) {
+      const wig = new THREE.Mesh(NPCFactory.mergedWigGeo, NPCFactory.sharedHairMat);
+      wig.position.copy(NPCFactory.mergedWigPos);
+      wig.scale.y = NPCFactory.mergedWigScaleY;
+      npc.mesh.add(wig);
+    }
     npc.mesh.userData['isBusiness'] = true;
+  }
+
+  /** Funde o terno uma vez (com UV/textura); peruca vira geometria compartilhada. */
+  private buildMergedBusiness(): void {
+    if (!this.businessTemplate) return;
+    this.businessTemplate.updateMatrixWorld(true);
+    const geos: THREE.BufferGeometry[] = [];
+    let wigGeo: THREE.BufferGeometry | null = null;
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const one = new THREE.Vector3(1, 1, 1);
+    const noScale = new THREE.Matrix4();
+    this.businessTemplate.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      if (m.userData['isWig']) {
+        if (!wigGeo) {
+          // geometria sem escala (o 0.85 vai no mesh de cada NPC)
+          pos.setFromMatrixPosition(m.matrixWorld);
+          quat.setFromRotationMatrix(m.matrixWorld);
+          noScale.compose(pos, quat, one);
+          wigGeo = m.geometry.clone().applyMatrix4(noScale);
+          NPCFactory.mergedWigPos.copy(pos);
+        }
+        return;
+      }
+      geos.push(m.geometry.clone().applyMatrix4(m.matrixWorld));
+    });
+    const merged = geos.length > 0 ? mergeGeometries(geos, false) : null;
+    if (merged) NPCFactory.mergedSuitGeo = merged;
+    if (wigGeo) NPCFactory.mergedWigGeo = wigGeo;
   }
 
   /** Bode da cidade das cabras: pes em local -0.14, frente +Z (igual ao humanoide). */

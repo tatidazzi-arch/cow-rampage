@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
-import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN } from './world';
+import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN, MINE, MANSION } from './world';
 import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
@@ -172,6 +172,29 @@ constructor() {}
     this.cow = new Cow(this.scene, this.physics, SPAWN.x, SPAWN.z);
     (window as unknown as Record<string, unknown>).__game = this;
     this.npcFactory = new NPCFactory();
+    const placeNPC = (x: number, z: number, kind?: 'goat') => {
+      const n = this.npcFactory.create(this.scene, this.physics, x, z, kind);
+      // sem sombra (são pequenos; economiza 1 passe inteiro no shadow map)
+      n.mesh.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = false;
+          m.receiveShadow = false;
+        }
+      });
+      this.npcs.push(n);
+    };
+    // minas e mansão: ninguém (nem spawn)
+    const npcSpotOk = (x: number, z: number): boolean => {
+      if (!this.world.isOnIsland(x, z, 3)) return false;
+      if (Math.hypot(x - MINE.x, z - MINE.z) < MINE.r + 8) return false;
+      if (Math.hypot(x - MANSION.x, z - MANSION.z) < 60) return false;
+      for (const b of this.world.buildings) {
+        if (Math.abs(x - b.x) < b.halfW + 1.5 && Math.abs(z - b.z) < b.halfD + 1.5) return false;
+      }
+      return true;
+    };
+    // 60 espalhados pela ilha principal
     for (let i = 0; i < 60; i++) {
       let x = 20, z = 20;
       for (let a = 0; a < 40; a++) {
@@ -180,9 +203,33 @@ constructor() {}
         const px = Math.cos(th) * rr;
         const pz = Math.sin(th) * rr;
         if (Math.hypot(px - SPAWN.x, pz - SPAWN.z) < 15) continue;
+        if (!npcSpotOk(px, pz)) continue;
         x = px; z = pz; break;
       }
-      this.npcs.push(this.npcFactory.create(this.scene, this.physics, x, z));
+      placeNPC(x, z);
+    }
+    // calçadas das avenidas (~30m, lados alternados)
+    for (let z = -1050, s = 1; z <= 1150; z += 30, s *= -1) {
+      const px = s * 7 + (worldRand() - 0.5) * 3;
+      if (npcSpotOk(px, z)) placeNPC(px, z);
+    }
+    for (let x = -1370, s = 1; x <= 1150; x += 30, s *= -1) {
+      const pz = s * 7 + (worldRand() - 0.5) * 3;
+      if (npcSpotOk(x, pz)) placeNPC(x, pz);
+    }
+    // ruas da cidade (~40m)
+    for (let k = -1; k <= 1; k++) {
+      for (let d = -300; d <= 300; d += 40) {
+        const jx = (worldRand() - 0.5) * 4;
+        if (npcSpotOk(k * 400 + jx, CITY.z + d)) placeNPC(k * 400 + jx, CITY.z + d);
+        const jz = (worldRand() - 0.5) * 4;
+        if (npcSpotOk(CITY.x + d, CITY.z + k * 400 + jz)) placeNPC(CITY.x + d, CITY.z + k * 400 + jz);
+      }
+    }
+    // ponte (poucos)
+    for (let z = -1400, s = 1; z <= -1120; z += 40, s *= -1) {
+      const px = s * 3;
+      if (this.onBridge(px, z)) placeNPC(px, z);
     }
     // bodes da cidade das cabras
     await this.world.buildForestPatch(-800, 200, 150, 150);
@@ -191,10 +238,10 @@ constructor() {}
       const rr = Math.sqrt(worldRand()) * 30;
       const gx = -750 + Math.cos(th) * rr;
       const gz = 850 + Math.sin(th) * rr;
-      this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz, 'goat'));
+      placeNPC(gx, gz, 'goat');
     }
     // trabalhadores da fazenda (ilha redonda, longe do nascimento)
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 20; i++) {
       let gx = BALL.x, gz = BALL.z;
       for (let a = 0; a < 12; a++) {
         const th = worldRand() * Math.PI * 2;
@@ -203,7 +250,7 @@ constructor() {}
         gz = BALL.z + Math.sin(th) * rr;
         if (Math.hypot(gx - SPAWN.x, gz - SPAWN.z) >= 12) break;
       }
-      this.npcs.push(this.npcFactory.create(this.scene, this.physics, gx, gz));
+      placeNPC(gx, gz);
     }
     loading(95, 'Criando NPCs...');
   }

@@ -16,6 +16,9 @@ export interface NPCPhysics {
   stateTimer: number;
   walkDir: number;
   speed: number;
+  /** destino secreto (ninguém vê): anda até lá e sorteia outro */
+  tx: number;
+  tz: number;
   skinSeat: {
     shirt: THREE.Color;
     skin: THREE.Color;
@@ -99,6 +102,7 @@ export class NPCFactory {
       state: 'walk', stateTimer: 0,
       walkDir: worldRand() > 0.5 ? 1 : -1,
       speed: 1.5 + worldRand() * 3,
+      tx: x, tz: z,
       skinSeat: { shirt, skin, hair, pants },
     };
     if (npc.kind === 'business') this.ensureBusiness(npc);
@@ -492,7 +496,10 @@ export class NPCFactory {
     const t = npc.body.translation();
     npc.mesh.position.set(t.x, t.y - 0.72, t.z);
     if (npc.state === 'walk') {
-      npc.mesh.rotation.y = npc.walkDir > 0 ? 0 : Math.PI;
+      // olha pra onde está indo
+      const dx = npc.tx - t.x;
+      const dz = npc.tz - t.z;
+      if (Math.hypot(dx, dz) > 0.5) npc.mesh.rotation.y = Math.atan2(dx, dz);
     }
   }
 

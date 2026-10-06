@@ -1069,18 +1069,50 @@ constructor() {}
     this.carrying.mesh.rotation.y = yaw;
   }
 
+  /** Sorteia um destino secreto (nunca na mansão nem nas minas). */
+  private pickNPCDestination(n: NPCPhysics): void {
+    const t = n.body.translation();
+    for (let a = 0; a < 12; a++) {
+      const th = Math.random() * Math.PI * 2;
+      const rr = 100 + Math.random() * 300;
+      const x = t.x + Math.cos(th) * rr;
+      const z = t.z + Math.sin(th) * rr;
+      if (!this.world.isOnIsland(x, z, 6)) continue;
+      if (Math.hypot(x - MINE.x, z - MINE.z) < MINE.r + 10) continue;
+      if (Math.hypot(x - MANSION.x, z - MANSION.z) < 70) continue;
+      let inB = false;
+      for (const b of this.world.buildings) {
+        if (Math.abs(x - b.x) < b.halfW + 1 && Math.abs(z - b.z) < b.halfD + 1) { inB = true; break; }
+      }
+      if (inB) continue;
+      n.tx = x;
+      n.tz = z;
+      return;
+    }
+    // sem lugar bom: fica onde está e tenta de novo em breve
+    n.tx = t.x;
+    n.tz = t.z;
+  }
+
   private updateNPCs(dt: number) {
     for (const n of this.npcs) {
       const t = n.body.translation();
       switch (n.state) {
         case 'walk': {
           const v = n.body.linvel();
-          // se travou numa parede, vira (sem oscilacao: chance por frame)
-          const blocked = (n.walkDir > 0 && v.x < n.speed * 0.3) || (n.walkDir < 0 && v.x > -n.speed * 0.3);
-          if ((blocked && Math.random() < 0.05) || Math.random() < 0.002) n.walkDir *= -1;
-          const onBall = Math.hypot(t.x - BALL.x, t.z - BALL.z) < BALL.r - 8;
-          if (!onBall && Math.hypot(t.x, t.z) > islandRadius(Math.atan2(t.z, t.x), true) - 10) n.walkDir *= -1;
-          n.body.setLinvel({ x: n.walkDir * n.speed, y: v.y, z: v.z }, true);
+          const dx = n.tx - t.x;
+          const dz = n.tz - t.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 3) {
+            // chegou: novo destino secreto
+            this.pickNPCDestination(n);
+          } else {
+            n.body.setLinvel({ x: (dx / d) * n.speed, y: v.y, z: (dz / d) * n.speed }, true);
+            // travou numa parede: desiste e sorteia outro
+            if (Math.hypot(v.x, v.z) < n.speed * 0.3 && Math.random() < 0.05) {
+              this.pickNPCDestination(n);
+            }
+          }
           break;
         }
         case 'stunned':
@@ -1089,6 +1121,7 @@ constructor() {}
             n.stateTimer -= dt;
             if (n.stateTimer <= 0) {
               this.setNPCState(n, 'walk');
+              this.pickNPCDestination(n);
               n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
               n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
             }
@@ -1142,6 +1175,7 @@ constructor() {}
         }
         n.body.setTranslation({ x: rx, y: 4, z: rz }, true);
         n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        this.pickNPCDestination(n);
         if (n.state === 'launched') {
           this.setNPCState(n, 'stunned');
           n.stateTimer = 3;

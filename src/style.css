@@ -114,6 +114,7 @@ canvas { display: block; }
 .thead { right: 124px; bottom: 124px; width: 66px; height: 66px; font-size: 11px; }
 .tflip { right: 204px; bottom: 44px; width: 66px; height: 66px; font-size: 12px; }
 .trun { left: 24px; bottom: 160px; width: 66px; height: 66px; font-size: 12px; }
+.tgear { left: 100px; bottom: 160px; width: 56px; height: 56px; font-size: 22px; }
 .tzin { right: 12px; top: 120px; width: 44px; height: 44px; font-size: 20px; }
 .tzout { right: 12px; top: 172px; width: 44px; height: 44px; font-size: 20px; }
 

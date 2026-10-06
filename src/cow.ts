@@ -31,6 +31,7 @@ export class Cow {
   constructor(scene: THREE.Scene, world: RAPIER.World, spawnX = 0, spawnZ = 0) {
     this.group = new THREE.Group();
     this.buildMesh();
+    this.buildGadgets();
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawnX, HALF_H + 1.0, spawnZ)
@@ -46,6 +47,72 @@ export class Cow {
     scene.add(this.group);
 
     void this.loadModel();
+  }
+
+  /** Aparelhos das costas: sela, jetpack de bomba atômica e bíblia. */
+  private gadgets: Record<string, THREE.Group> = {};
+  private flame: THREE.Mesh | null = null;
+
+  private buildGadgets(): void {
+    // sela: manta no dorso
+    const saddle = new THREE.Group();
+    const blanket = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 0.2, 2.2),
+      new THREE.MeshLambertMaterial({ color: 0x8a4a2a }),
+    );
+    blanket.position.set(0, 3.3, -0.2);
+    saddle.add(blanket);
+    // jetpack: 2 cilindros + faixas vermelhas (bomba atômica!)
+    const pack = new THREE.Group();
+    const tubeMat = new THREE.MeshLambertMaterial({ color: 0x555560 });
+    const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
+    for (const s of [-0.55, 0.55]) {
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.3, 10), tubeMat);
+      tube.position.set(s, 3.7, -1.4);
+      tube.castShadow = true;
+      pack.add(tube);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.37, 0.37, 0.2, 10), bandMat);
+      band.position.set(s, 3.9, -1.4);
+      pack.add(band);
+    }
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.5, 1.4, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff8830 }),
+    );
+    flame.position.set(0, 2.5, -1.4);
+    flame.rotation.x = Math.PI;
+    flame.visible = false;
+    pack.add(flame);
+    this.flame = flame;
+    // bíblia: livro marrom + páginas
+    const book = new THREE.Group();
+    const cover = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.18, 0.9),
+      new THREE.MeshLambertMaterial({ color: 0x5a3218 }),
+    );
+    cover.position.set(0, 3.4, 0.3);
+    book.add(cover);
+    const pages = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.08, 0.8),
+      new THREE.MeshLambertMaterial({ color: 0xf5ecd0 }),
+    );
+    pages.position.set(0, 3.48, 0.3);
+    book.add(pages);
+    this.gadgets = { sela: saddle, jetpack: pack, biblia: book };
+    for (const [id, g] of Object.entries(this.gadgets)) {
+      g.visible = id === 'sela';
+      this.group.add(g);
+    }
+  }
+
+  /** Mostra só o aparelho equipado. */
+  setGadgetVisual(id: string): void {
+    for (const [k, g] of Object.entries(this.gadgets)) g.visible = k === id;
+  }
+
+  /** Chama do jetpack (só com jetpack equipado). */
+  setFlame(on: boolean): void {
+    if (this.flame) this.flame.visible = on;
   }
 
   private async loadModel(): Promise<void> {

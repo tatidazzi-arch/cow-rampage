@@ -243,6 +243,9 @@ constructor() {}
     this.input.onPadMenu = () => {
       if (this.started) this.exitToMenu();
     };
+    this.input.onCycleGadget = (dir: number) => {
+      if (this.started) this.cycleGadget(dir);
+    };
     this.input.onPadStatus = (connected) => {
       if (connected && this.started) {
         this.showMessage('🎮 Controle conectado! Bola=pular, R1=cabeçada (sem X!)');
@@ -382,6 +385,7 @@ constructor() {}
       <div>🪙 DINCOW: <span id="score">0</span> <span id="padstat"></span></div>
       <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
       <div id="carry-status"></div>
+      <div id="gadget-status"></div>
       <button id="menuBtn">MENU</button>
     `;
     document.body.appendChild(hud);
@@ -394,8 +398,8 @@ constructor() {}
     controls.id = 'controls';
     controls.style.display = 'none';
     controls.textContent = isTouchDevice()
-      ? 'Joystick: mover | Arrastar na tela: câmera | Botões: ações'
-      : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom';
+      ? 'Joystick: mover | Arrastar na tela: câmera | Botões: ações | 🎒: aparelho'
+      : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom | 1/2/3:Aparelho';
     document.body.appendChild(controls);
 
     const mousehint = document.createElement('div');
@@ -749,11 +753,12 @@ constructor() {}
     document.getElementById('controls')!.style.display = 'block';
     document.getElementById('mission')!.style.display = 'block';
     this.started = true;
-    // teclado/controle/touch limpos ao começar
+    // teclado/controle/touch limpos ao começar + sela equipada
     this.input.keys = {};
     this.input.joyF = 0;
     this.input.joyS = 0;
     this.input.takePadDelta();
+    this.setGadget('sela');
     this.netActive = multiplayer && this.net.connected;
     // skin escolhida na loja (vale pra vaca local e pros amigos verem)
     const mySkin = getSelectedId();
@@ -833,6 +838,8 @@ constructor() {}
     document.getElementById('score')!.textContent = String(this.score);
     const padstat = document.getElementById('padstat');
     if (padstat) padstat.textContent = this.input.padConnected ? '🎮' : '';
+    const gadgetEl = document.getElementById('gadget-status');
+    if (gadgetEl) gadgetEl.textContent = this.gadgetHint();
     // tudo que ganhou vira DINCOW na carteira (persistente, gasta na loja)
     const gain = this.score - this.lastScore;
     if (gain > 0) addDincow(gain);
@@ -932,6 +939,37 @@ constructor() {}
       }
     }
 
+    // bíblia: levita a pessoa pra sempre (E num levitando pega de volta)
+    if (this.gadget === 'biblia' && !this.carrying) {
+      let bestB: NPCPhysics | null = null;
+      let bestDistB = 10;
+      for (const n of this.npcs) {
+        if (n.vendor) continue;
+        if (n.state !== 'walk' && n.state !== 'stunned' && n.state !== 'fallen' && n.state !== 'levitate') continue;
+        const t = n.body.translation();
+        const d = Math.hypot(t.x - cx, t.z - cz);
+        if (d < bestDistB) {
+          bestDistB = d;
+          bestB = n;
+        }
+      }
+      if (bestB) {
+        if (bestB.state === 'levitate') {
+          // pega de volta quem estava flutuando
+          this.carrying = bestB;
+          this.setNPCState(bestB, 'carried');
+        } else {
+          const t = bestB.body.translation();
+          this.setNPCState(bestB, 'levitate');
+          bestB.levY = t.y + 6;
+          bestB.levT = 0;
+          bestB.body.setLinvel({ x: 0, y: 2, z: 0 }, true);
+          this.spawnParticles(t.x, t.y + 1, t.z, 12, 0xffe97a);
+        }
+        return;
+      }
+    }
+
     if (this.carrying) {
       const near = this.world.cannons.find((c) => Math.hypot(c.x - cx, c.z - cz) < 10);
       if (near) {
@@ -1022,6 +1060,28 @@ constructor() {}
     if (state !== 'walk') {
       npc.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+  }
+
+  /** Aparelhos das costas: sela (pegar gente), jetpack (voar), bíblia (levitar). */
+  private gadget: 'sela' | 'jetpack' | 'biblia' = 'sela';
+  private readonly GADGETS = ['sela', 'jetpack', 'biblia'] as const;
+
+  private setGadget(g: 'sela' | 'jetpack' | 'biblia') {
+    this.gadget = g;
+    this.cow.setGadgetVisual(g);
+    if (g !== 'jetpack') this.cow.setFlame(false);
+  }
+
+  private cycleGadget(dir: number) {
+    const i = this.GADGETS.indexOf(this.gadget);
+    const n = this.GADGETS[(i + dir + this.GADGETS.length) % this.GADGETS.length]!;
+    this.setGadget(n);
+  }
+
+  private gadgetHint(): string {
+    if (this.gadget === 'jetpack') return '🎒 Jetpack · segure ESPAÇO/PULAR pra voar';
+    if (this.gadget === 'biblia') return '🎒 Bíblia · [E] levita a pessoa pra sempre';
+    return '🎒 Sela (1/2/3 troca) · [E] pegar gente';
   }
 
   private cowAttack() {
@@ -1119,8 +1179,18 @@ constructor() {}
         this.wasSwimming = false;
       }
 
-      // pulo (na agua vira remada)
-      const jump = this.input.consumeOnce('Space');
+      // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = voar (sem limite: é atômico!)
+      const thrusting = this.gadget === 'jetpack' && this.input.isDown('Space');
+      this.cow.setFlame(thrusting);
+      if (thrusting) {
+        const bv = body.linvel();
+        body.setLinvel({ x: bv.x, y: 14, z: bv.z }, true);
+        if (Math.random() < 0.5) {
+          this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xff8830);
+        }
+        this.cow.resetJumps();
+      }
+      const jump = !thrusting && this.input.consumeOnce('Space');
       if (jump) {
         if (inWater) {
           const v = body.linvel();
@@ -1338,6 +1408,18 @@ constructor() {}
         case 'carried':
         case 'inCannon':
           break;
+        case 'levitate': {
+          // bíblia: flutua pra sempre com balanço suave
+          n.levT -= dt;
+          const targetY = n.levY + Math.sin(performance.now() / 600) * 0.4;
+          const lv = n.body.linvel();
+          n.body.setLinvel({ x: lv.x * 0.9, y: (targetY - t.y) * 3, z: lv.z * 0.9 }, true);
+          if (n.levT <= 0) {
+            n.levT = 0.4;
+            this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xffe97a);
+          }
+          break;
+        }
       }
       // colisao com vaca aproximada (empurrar pessoas)
       const cx = this.cow.group.position.x;
@@ -1353,7 +1435,8 @@ constructor() {}
       }
       this.npcFactory.syncMesh(n);
       // afogado (ex.: lançado pelo canhão na água): volta pra ilha principal
-      if (t.y < 0.5 && n.state !== 'carried' && n.state !== 'inCannon'
+      // (levitando nunca afoga)
+      if (t.y < 0.5 && n.state !== 'carried' && n.state !== 'inCannon' && n.state !== 'levitate'
         && !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2)) {
         this.spawnParticles(t.x, 0.5, t.z, 8, 0x3a8fcf);
         let rx = 20, rz = 20;
@@ -1481,6 +1564,9 @@ constructor() {}
       this.input.keys['KeyF'] = false;
       this.dropCarried();
     }
+    if (this.input.consumeOnce('Digit1')) this.setGadget('sela');
+    if (this.input.consumeOnce('Digit2')) this.setGadget('jetpack');
+    if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
 
     this.updateCow(dt);
     this.updateNPCs(dt);

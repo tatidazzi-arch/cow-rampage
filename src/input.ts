@@ -24,6 +24,7 @@ export class Input {
   padDY = 0;
   onPadStatus: ((connected: boolean, id: string) => void) | null = null;
   onPadMenu: (() => void) | null = null;
+  onCycleGadget: ((dir: number) => void) | null = null;
 
   private prevPad: boolean[] = [];
 
@@ -197,6 +198,8 @@ export class Input {
     if (pr(13)) zoom += 10; // baixo afasta
     if (zoom !== 0) this.wheelDX += zoom;
     if (edge(9) && this.onPadMenu) this.onPadMenu(); // Options = menu
+    if (edge(14) && this.onCycleGadget) this.onCycleGadget(-1); // <- aparelho anterior
+    if (edge(15) && this.onCycleGadget) this.onCycleGadget(1); // -> próximo aparelho
     for (let i = 0; i < 18; i++) this.prevPad[i] = pr(i);
   }
 

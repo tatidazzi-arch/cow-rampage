@@ -32,6 +32,7 @@ export function setupTouchControls(input: Input, isPlaying: () => boolean): void
     <div class="tbtn thead" data-tbtn="head">CABEÇADA</div>
     <div class="tbtn tflip" data-tbtn="flip">MORTAL</div>
     <div class="tbtn trun" data-tbtn="run">CORRER</div>
+    <div class="tbtn tgear" data-tbtn="gear">🎒</div>
     <div class="tbtn tzin" data-tbtn="zin">+</div>
     <div class="tbtn tzout" data-tbtn="zout">−</div>
   `;
@@ -136,6 +137,8 @@ export function setupTouchControls(input: Input, isPlaying: () => boolean): void
       if (kind === 'run') {
         input.keys['ShiftLeft'] = !input.keys['ShiftLeft'];
         btn.classList.toggle('on', !!input.keys['ShiftLeft']);
+      } else if (kind === 'gear') {
+        if (input.onCycleGadget) input.onCycleGadget(1);
       } else if (kind === 'zin') {
         input.wheelDX -= 150;
       } else if (kind === 'zout') {

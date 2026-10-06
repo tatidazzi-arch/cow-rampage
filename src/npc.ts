@@ -4,7 +4,7 @@ import { worldRand } from './rng';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon';
+export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
 
 export interface NPCPhysics {
   id: number;
@@ -19,6 +19,9 @@ export interface NPCPhysics {
   /** destino secreto (ninguém vê): anda até lá e sorteia outro */
   tx: number;
   tz: number;
+  /** levitação da bíblia: altura-alvo e timer de faísca */
+  levY: number;
+  levT: number;
   /** vendedor da loja (não anda, não pode ser pego nem atacado) */
   vendor?: boolean;
   skinSeat: {
@@ -105,6 +108,7 @@ export class NPCFactory {
       walkDir: worldRand() > 0.5 ? 1 : -1,
       speed: 1.5 + worldRand() * 3,
       tx: x, tz: z,
+      levY: 0, levT: 0,
       skinSeat: { shirt, skin, hair, pants },
     };
     if (npc.kind === 'business') this.ensureBusiness(npc);

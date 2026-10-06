@@ -35,6 +35,9 @@ export class Game {
 
   private score = 0;
   private lastScore = 0;
+  private quality: 'high' | 'low' = 'high';
+  private sunLight: THREE.DirectionalLight | null = null;
+  private menuCamT = 0;
   private chaos = 0;
   private carrying: NPCPhysics | null = null;
   private camDist = 16;
@@ -127,6 +130,8 @@ constructor() {}
     dl.shadow.camera.bottom = -250;
     this.scene.add(dl);
     this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4));
+    this.sunLight = dl;
+    this.applyQuality();
 
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -137,8 +142,102 @@ constructor() {}
     loading(15, 'Criando cena...');
   }
 
+  /** Configurações salvas (qualidade + sensibilidade). */
+  private loadSettings() {
+    try {
+      const q = window.localStorage.getItem('cowrampage.quality');
+      this.quality = q === 'low' ? 'low' : 'high';
+      const s = Number.parseFloat(window.localStorage.getItem('cowrampage.sens') ?? '1');
+      this.input.sensitivity = Number.isFinite(s) ? Math.min(2, Math.max(0.5, s)) : 1;
+    } catch {
+      this.quality = 'high';
+    }
+  }
+
+  private applyQuality() {
+    const low = this.quality === 'low';
+    try {
+      window.localStorage.setItem('cowrampage.quality', this.quality);
+    } catch { /* ignora */ }
+    if (this.sunLight) this.sunLight.castShadow = !low;
+    this.renderer.shadowMap.enabled = !low;
+    // recompila os shaders já criados (mundo pode já existir)
+    const mats = new Set<THREE.Material>();
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mm = m.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mm)) mm.forEach((x) => mats.add(x));
+      else if (mm) mats.add(mm);
+    });
+    mats.forEach((m) => { m.needsUpdate = true; });
+    this.refreshCfgMenu();
+  }
+
+  private setQuality(q: 'high' | 'low') {
+    this.quality = q;
+    this.applyQuality();
+  }
+
+  private setSensitivity(v: number) {
+    if (!Number.isFinite(v)) return;
+    this.input.sensitivity = Math.min(2, Math.max(0.5, v));
+    try {
+      window.localStorage.setItem('cowrampage.sens', String(this.input.sensitivity));
+    } catch { /* ignora */ }
+    this.refreshCfgMenu();
+  }
+
+  private openCfgMenu() {
+    document.getElementById('gamemenu')!.style.display = 'none';
+    document.getElementById('configmenu')!.style.display = 'flex';
+    this.refreshCfgMenu();
+  }
+
+  private closeCfgMenu() {
+    document.getElementById('configmenu')!.style.display = 'none';
+    document.getElementById('gamemenu')!.style.display = 'flex';
+    this.refreshMenuWallet();
+  }
+
+  private refreshCfgMenu() {
+    const qH = document.getElementById('qHigh');
+    const qL = document.getElementById('qLow');
+    if (qH) qH.style.background = this.quality === 'high' ? '#ffcc00' : '#fff';
+    if (qL) qL.style.background = this.quality === 'low' ? '#ffcc00' : '#fff';
+    const sens = document.getElementById('sensRange') as HTMLInputElement | null;
+    const val = document.getElementById('sensVal');
+    if (sens && this.input) sens.value = String(this.input.sensitivity);
+    if (val && this.input) val.textContent = this.input.sensitivity.toFixed(1);
+  }
+
+  private refreshMenuWallet() {
+    const el = document.getElementById('menuwallet');
+    if (el) el.textContent = `🪙 ${getWallet()} DINCOW`;
+  }
+
+  /** Sair: volta pra tela da senha. */
+  private lockGame() {
+    if (this.netActive) this.leaveNet();
+    this.started = false;
+    if (document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch { /* ignora */ }
+    }
+    for (const id of ['hud', 'controls', 'mission', 'scores', 'leaveBtn', 'touchui', 'mousehint', 'gamemenu', 'netmenu', 'skinmenu', 'configmenu']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
+    const pw = document.getElementById('pwInput') as HTMLInputElement | null;
+    if (pw) pw.value = '';
+    document.getElementById('lockscreen')!.style.display = 'flex';
+    document.title = 'Acesso';
+  }
+
   private setupInput() {
     this.input = new Input(this.renderer.domElement);
+    this.loadSettings();
     setupTouchControls(this.input, () => this.started);
     this.input.onPadMenu = () => {
       if (this.started) this.exitToMenu();
@@ -179,6 +278,7 @@ constructor() {}
     this.world.buildDistricts();
 
     this.cow = new Cow(this.scene, this.physics, SPAWN.x, SPAWN.z);
+    this.cow.syncMesh();
     (window as unknown as Record<string, unknown>).__game = this;
     this.npcFactory = new NPCFactory();
     const placeNPC = (x: number, z: number, kind?: 'goat') => {
@@ -330,14 +430,22 @@ constructor() {}
         <button id="unlockBtn">ENTRAR</button>
       </div>
       <div id="gamemenu" style="display:none">
-        <h1>COW RAMPAGE 3D</h1>
-        <h2>Goat Simulator Edition</h2>
-        <p><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Mover | <span class="k">ESPACO</span> Pular</p>
-        <p><span class="k">E</span> Pegar pessoa / Canhao | <span class="k">F</span> Soltar</p>
-        <p><span class="k">SHIFT</span> Correr | <span class="k">Q</span> Cabecada | <span class="k">R</span> Mortal</p>
-        <button id="playBtn">1 JOGADOR</button>
-        <button id="netBtn">MULTIPLAYER</button>
-        <button id="skinBtn">SKINS 🐄</button>
+        <h1>COW RAMPAGE</h1>
+        <h2>🐄 Goat Simulator Edition</h2>
+        <div id="menuwallet">🪙 0 DINCOW</div>
+        <button id="playBtn">jogar offline</button>
+        <button id="netBtn">jogar online</button>
+        <button id="cfgBtn">configurações</button>
+        <button id="sairBtn">sair</button>
+        <button id="skinBtn">🐄 skins</button>
+        <p class="controls-mini">WASD mover · Espaço pular · Q cabeçada · 🎮 controle funciona!</p>
+        <p class="ver">v0.0.1 · multiplayer sem conta</p>
+      </div>
+      <div id="configmenu" style="display:none">
+        <h1>CONFIGURAÇÕES</h1>
+        <div class="cfgrow"><span>Qualidade</span><span><button id="qHigh">ALTA</button><button id="qLow">BAIXA</button></span></div>
+        <div class="cfgrow"><span>Sensibilidade</span><span><input id="sensRange" type="range" min="0.5" max="2" step="0.1" value="1" /><b id="sensVal">1.0</b></span></div>
+        <button id="cfgBack">VOLTAR</button>
       </div>
       <div id="skinmenu" style="display:none">
         <h1>SKINS</h1>
@@ -377,6 +485,31 @@ constructor() {}
     document.getElementById('skinBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.openSkinMenu();
+    });
+    document.getElementById('cfgBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openCfgMenu();
+    });
+    document.getElementById('sairBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.lockGame();
+    });
+    document.getElementById('cfgBack')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeCfgMenu();
+    });
+    document.getElementById('qHigh')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setQuality('high');
+    });
+    document.getElementById('qLow')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setQuality('low');
+    });
+    const sens = document.getElementById('sensRange') as HTMLInputElement;
+    sens.addEventListener('click', (e) => e.stopPropagation());
+    sens.addEventListener('input', () => {
+      this.setSensitivity(Number.parseFloat(sens.value));
     });
     document.getElementById('skinBack')!.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -425,6 +558,7 @@ constructor() {}
     (document.getElementById('pwInput') as HTMLInputElement | null)?.blur();
     document.getElementById('lockscreen')!.style.display = 'none';
     document.getElementById('gamemenu')!.style.display = 'flex';
+    this.refreshMenuWallet();
   }
 
   private openNetMenu() {
@@ -441,6 +575,7 @@ constructor() {}
   private closeNetMenu() {
     document.getElementById('netmenu')!.style.display = 'none';
     document.getElementById('gamemenu')!.style.display = 'flex';
+    this.refreshMenuWallet();
   }
 
   private openSkinMenu() {
@@ -452,6 +587,7 @@ constructor() {}
   private closeSkinMenu() {
     document.getElementById('skinmenu')!.style.display = 'none';
     document.getElementById('gamemenu')!.style.display = 'flex';
+    this.refreshMenuWallet();
   }
 
   private renderSkins() {
@@ -514,6 +650,7 @@ constructor() {}
     if (start) start.style.display = 'flex';
     document.getElementById('gamemenu')!.style.display = 'flex';
     document.getElementById('netmenu')!.style.display = 'none';
+    this.refreshMenuWallet();
     const netPlay = document.getElementById('netPlay');
     if (netPlay) netPlay.style.display = 'none';
   }
@@ -1262,14 +1399,14 @@ constructor() {}
     const md = this.input.takeMouseDelta();
     // com pointer lock OU arrastando (mouse ou dedo na tela)
     if (this.input.mouseLocked || this.input.mouseDown || this.input.isTouch) {
-      this.camYaw += md.x * 0.003;
-      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003));
+      this.camYaw += md.x * 0.003 * this.input.sensitivity;
+      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch - md.y * 0.003 * this.input.sensitivity));
     }
     // olhar pelo analógico direito do controle (girar: invertido do arrasto)
     const pd = this.input.takePadDelta();
     if (pd.x !== 0 || pd.y !== 0) {
-      this.camYaw -= pd.x * 0.003;
-      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch + pd.y * 0.003));
+      this.camYaw -= pd.x * 0.003 * this.input.sensitivity;
+      this.camPitch = Math.max(-0.5, Math.min(1.2, this.camPitch + pd.y * 0.003 * this.input.sensitivity));
     }
     const wd = this.input.takeWheelDelta();
     if (wd !== 0) {
@@ -1338,12 +1475,26 @@ constructor() {}
     this.updateHUD();
   }
 
+  /** Vitrine no menu: câmera orbitando a fazenda + vaca pastando. */
+  private updateMenuCamera(dt: number) {
+    this.menuCamT += dt * 0.1;
+    const a = this.menuCamT;
+    this.camera.position.set(SPAWN.x + Math.sin(a) * 18, 8, SPAWN.z + Math.cos(a) * 18);
+    this.camera.lookAt(SPAWN.x, 2, SPAWN.z);
+  }
+
   private animate() {
     requestAnimationFrame(() => this.animate());
     const now = performance.now();
     const dt = Math.min((now - this.lastTime) / 1000, 0.05);
     this.lastTime = now;
-    this.update(dt);
+    if (this.started) {
+      this.update(dt);
+    } else if (this.cow && this.world) {
+      this.updateMenuCamera(dt);
+      this.cow.update(dt, 0, false);
+      this.world.updateAnims(dt);
+    }
     this.renderer.render(this.scene, this.camera);
   }
 }

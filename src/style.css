@@ -37,18 +37,52 @@ canvas { display: block; }
 
 #start {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: rgba(0,0,0,0.9); z-index: 20; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-family: Arial, sans-serif; color: #fff;
+  z-index: 20; display: flex; justify-content: flex-end;
+  font-family: Arial, sans-serif; color: #fff; pointer-events: none;
 }
-#start h1 { font-size: 52px; color: #ffcc00; margin-bottom: 10px; text-shadow: 3px 3px 6px #000; }
-#start h2 { font-size: 22px; color: #aaa; margin-bottom: 25px; }
-#start p { font-size: 16px; color: #ccc; margin: 4px; }
-#start .k { display: inline-block; background: #333; border: 1px solid #666; border-radius: 4px; padding: 2px 8px; margin: 2px; font-size: 14px; }
+#start > div { pointer-events: auto; }
+#lockscreen {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 22;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+#gamemenu {
+  width: 360px; max-width: 94vw; height: 100%;
+  background: #fff; color: #000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 20px; box-sizing: border-box;
+}
+#gamemenu h1 { font-size: 44px; color: #000; margin: 0; text-shadow: none; letter-spacing: 1px; }
+#gamemenu h2 { font-size: 19px; color: #555; margin: 0 0 6px 0; }
+#menuwallet { font-size: 20px; font-weight: bold; color: #b8860b; margin-bottom: 4px; }
+#gamemenu button {
+  width: 260px; max-width: 80vw; padding: 13px; font-size: 20px; font-weight: bold;
+  background: #fff; color: #000; border: 3px solid #000; border-radius: 4px; cursor: pointer;
+  font-family: Arial, sans-serif;
+}
+#gamemenu button:hover { background: #ffcc00; }
+#gamemenu #skinBtn { border-color: #55aaff; }
+#gamemenu .controls-mini { font-size: 13px; color: #555; text-align: center; margin: 8px 0 0 0; }
+#gamemenu .ver { font-size: 12px; color: #999; margin: 0; }
+#gamemenu p { font-size: 16px; color: #ccc; margin: 4px; }
+#netmenu, #skinmenu, #configmenu {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 23;
+  background: rgba(0,0,0,0.93); border: 1px solid #666; border-radius: 12px;
+  padding: 22px 30px; display: flex; flex-direction: column; align-items: center;
+  max-width: 94vw; max-height: 92vh; overflow-y: auto;
+}
+#netmenu h1, #skinmenu h1, #configmenu h1 { font-size: 30px; color: #ffcc00; margin: 0 0 8px 0; }
+#configmenu .cfgrow { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 8px 0; min-width: 280px; font-size: 17px; color: #fff; }
+#configmenu .cfgrow button { padding: 6px 16px; font-size: 15px; background: #fff; color: #000; border: 2px solid #000; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: Arial, sans-serif; margin-left: 6px; }
+#configmenu input[type="range"] { width: 130px; accent-color: #ffcc00; }
+#configmenu #sensVal { min-width: 34px; text-align: right; color: #ffcc00; }
+@media (max-width: 700px), (orientation: portrait) {
+  #start { align-items: flex-end; }
+  #gamemenu { width: 100%; height: auto; max-height: 78vh; padding: 16px; gap: 9px; }
+  #gamemenu h1 { font-size: 34px; }
+  #gamemenu button { width: 240px; font-size: 18px; padding: 11px; }
+}
 #lockscreen, #gamemenu { display: flex; flex-direction: column; align-items: center; }
 #lockscreen p { font-family: Arial, sans-serif; color: #ccc; font-size: 18px; margin-bottom: 4px; }
-#playBtn { margin-top: 25px; padding: 15px 60px; font-size: 28px; background: #ffcc00; color: #000; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
-#playBtn:hover { background: #ffdd44; }
 #unlockBtn { margin-top: 25px; padding: 15px 60px; font-size: 28px; background: #ffcc00; color: #000; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
 #unlockBtn:hover { background: #ffdd44; }
 #netmenu { display: flex; flex-direction: column; align-items: center; }

@@ -15,6 +15,8 @@ export class Input {
   /** joystick virtual: -1..1 (frente / direita) */
   joyF = 0;
   joyS = 0;
+  /** sensibilidade da câmera (configurações) */
+  sensitivity = 1;
   /** controle (gamepad) conectado? */
   padConnected = false;
   /** olhar pelo analógico direito acumula aqui */

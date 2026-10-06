@@ -496,10 +496,9 @@ export class NPCFactory {
     const t = npc.body.translation();
     npc.mesh.position.set(t.x, t.y - 0.72, t.z);
     if (npc.state === 'walk') {
-      // olha pra onde está indo
-      const dx = npc.tx - t.x;
-      const dz = npc.tz - t.z;
-      if (Math.hypot(dx, dz) > 0.5) npc.mesh.rotation.y = Math.atan2(dx, dz);
+      // olha pra onde está INDO (não pro destino): sem andar de lado
+      const v = npc.body.linvel();
+      if (Math.hypot(v.x, v.z) > 0.5) npc.mesh.rotation.y = Math.atan2(v.x, v.z);
     }
   }
 

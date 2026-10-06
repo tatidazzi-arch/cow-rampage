@@ -82,7 +82,7 @@ export class Cow {
       new THREE.ConeGeometry(0.5, 1.4, 8),
       new THREE.MeshBasicMaterial({ color: 0xff8830 }),
     );
-    flame.position.set(0, 2.5, -0.5);
+    flame.position.set(0, 2.7, -1.7);
     flame.rotation.x = Math.PI;
     flame.visible = false;
     pack.add(flame);
@@ -135,20 +135,22 @@ export class Cow {
       });
       const wrap = new THREE.Group();
       wrap.add(inner);
-      // em pé no dorso (eixo comprido na vertical, ~2m)
-      wrap.rotation.x = -Math.PI / 2;
+      // deitada no dorso (eixo comprido ao longo da espinha, ~2m)
       wrap.position.set(0, 0, 0);
       pack.add(wrap);
-      // assenta a base MEDIDA da bomba no dorso (sem chute)
+      // mede de verdade e assenta no dorso (sem chute)
       wrap.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(wrap);
-      wrap.position.set(0, 3.0 - bb.min.y, -0.5);
+      const bs = bb.getSize(new THREE.Vector3());
+      const baseY = 3.0;
+      wrap.position.set(0, baseY - bb.min.y, -0.3);
+      const cy = baseY - bb.min.y + (bb.max.y - bb.min.y) / 2;
       // faixas vermelhas no corpo da bomba
       const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
-      for (const by of [3.55, 4.45]) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.07, 8, 20), bandMat);
-        ring.rotation.x = Math.PI / 2;
-        ring.position.set(0, by, -0.5);
+      const ringR = Math.max(bs.x, bs.y) / 2 + 0.03;
+      for (const dz of [-0.45, 0.45]) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, 0.07, 8, 20), bandMat);
+        ring.position.set(0, cy, -0.3 + dz);
         pack.add(ring);
       }
       for (const t of fallback) t.visible = false;

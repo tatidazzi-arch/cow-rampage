@@ -62,24 +62,27 @@ export class Cow {
     );
     blanket.position.set(0, 3.3, -0.2);
     saddle.add(blanket);
-    // jetpack: 2 cilindros + faixas vermelhas (bomba atômica!)
+    // jetpack: bomba atômica de verdade (nuke.obj) + faixas vermelhas
     const pack = new THREE.Group();
     const tubeMat = new THREE.MeshLambertMaterial({ color: 0x555560 });
     const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
+    const tubes: THREE.Mesh[] = [];
     for (const s of [-0.55, 0.55]) {
       const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.3, 10), tubeMat);
       tube.position.set(s, 3.7, -1.4);
       tube.castShadow = true;
       pack.add(tube);
+      tubes.push(tube);
       const band = new THREE.Mesh(new THREE.CylinderGeometry(0.37, 0.37, 0.2, 10), bandMat);
       band.position.set(s, 3.9, -1.4);
       pack.add(band);
+      tubes.push(band);
     }
     const flame = new THREE.Mesh(
       new THREE.ConeGeometry(0.5, 1.4, 8),
       new THREE.MeshBasicMaterial({ color: 0xff8830 }),
     );
-    flame.position.set(0, 2.5, -1.4);
+    flame.position.set(0, 2.5, -0.5);
     flame.rotation.x = Math.PI;
     flame.visible = false;
     pack.add(flame);
@@ -103,8 +106,56 @@ export class Cow {
       g.visible = id === 'sela';
       this.group.add(g);
     }
+    // carrega a bomba de verdade e troca os cilindros (fallback fica se falhar)
+    void this.loadNuke(pack, tubes);
   }
 
+  /** Bomba atômica do pack do usuário no lugar dos cilindros. */
+  private async loadNuke(pack: THREE.Group, fallback: THREE.Mesh[]): Promise<void> {
+    try {
+      const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
+      const model = await new OBJLoader().loadAsync('models/nuke/nuke.obj');
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const longest = Math.max(size.x, size.y, size.z);
+      const s = longest > 0 ? 2.0 / longest : 1;
+      const gunmetal = new THREE.MeshLambertMaterial({ color: 0x3a3f45 });
+      const inner = new THREE.Group();
+      inner.add(model);
+      inner.scale.setScalar(s);
+      inner.position.set(-center.x * s, -center.y * s, -center.z * s);
+      inner.updateMatrixWorld(true);
+      inner.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.material = gunmetal;
+          m.castShadow = true;
+        }
+      });
+      const wrap = new THREE.Group();
+      wrap.add(inner);
+      // em pé no dorso (eixo comprido na vertical, ~2m)
+      wrap.rotation.x = -Math.PI / 2;
+      wrap.position.set(0, 0, 0);
+      pack.add(wrap);
+      // assenta a base MEDIDA da bomba no dorso (sem chute)
+      wrap.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(wrap);
+      wrap.position.set(0, 3.0 - bb.min.y, -0.5);
+      // faixas vermelhas no corpo da bomba
+      const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
+      for (const by of [3.55, 4.45]) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.07, 8, 20), bandMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(0, by, -0.5);
+        pack.add(ring);
+      }
+      for (const t of fallback) t.visible = false;
+    } catch (err) {
+      console.warn('Bomba nao carregou, usando cilindros:', err);
+    }
+  }
   /** Mostra só o aparelho equipado. */
   setGadgetVisual(id: string): void {
     for (const [k, g] of Object.entries(this.gadgets)) g.visible = k === id;

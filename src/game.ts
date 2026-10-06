@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
-import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN, MINE, MANSION } from './world';
+import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN, MINE, MANSION, FOREST, GOATS } from './world';
 import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
@@ -241,12 +241,12 @@ constructor() {}
       if (this.onBridge(px, z)) placeNPC(px, z);
     }
     // bodes da cidade das cabras
-    await this.world.buildForestPatch(-800, 200, 150, 150);
+    await this.world.buildForestPatch(FOREST.x, FOREST.z, FOREST.r, 150);
     for (let i = 0; i < 10; i++) {
       const th = worldRand() * Math.PI * 2;
       const rr = Math.sqrt(worldRand()) * 30;
-      const gx = -750 + Math.cos(th) * rr;
-      const gz = 850 + Math.sin(th) * rr;
+      const gx = GOATS.x + Math.cos(th) * rr;
+      const gz = GOATS.z + Math.sin(th) * rr;
       placeNPC(gx, gz, 'goat');
     }
     // trabalhadores da fazenda (poucos: spawn tranquilo)

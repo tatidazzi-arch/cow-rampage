@@ -104,11 +104,11 @@ export const DAM_RECT = { x0: -440, x1: -80, z0: -520, z1: -320 };
 export const CITY = { x: 0, z: 150, r: 450 };
 /** Nascimento da vaca (pasto aberto da fazenda, longe das construções). */
 export const SPAWN = { x: -40, z: -1810 };
-export const MANSION = { x: 850, z: -100 };
-export const CEMETERY = { x: -150, z: 500, r: 25 };
-export const FOREST = { x: -800, z: 200, r: 150 };
-export const GOATS = { x: -750, z: 850, r: 40 };
-export const MINE = { x: 700, z: 800, r: 70 };
+export const MANSION = { x: -850, z: -100 };
+export const CEMETERY = { x: -450, z: -50, r: 25 };
+export const FOREST = { x: 800, z: 200, r: 150 };
+export const GOATS = { x: 950, z: 600, r: 40 };
+export const MINE = { x: -700, z: 800, r: 70 };
 
 export class World {
   buildings: Building[] = [];
@@ -2107,11 +2107,11 @@ const { x: cx, z: cz } = MINE;
     this.makeSign(['FAZENDA'], 80, -1520, faceCenter(80, -1520), signBody);
     this.makeSign(['REPRESA'], -20, -300, faceCenter(-20, -300), signBody);
     this.makeSign(['CIDADE'], 60, -60, Math.PI, signBody);
-    this.makeSign(['MANSÃO DO', 'PRESIDENTE RAMPIG'], 700, -100, faceCenter(700, -100), signBody);
-    this.makeSign(['CEMITÉRIO'], -150, 300, 0, signBody);
-    this.makeSign(['FLORESTA'], -420, 200, Math.PI / 2, signBody);
-    this.makeSign(['CIDADE DAS', 'CABRAS'], -580, 680, faceCenter(-580, 680), signBody);
-    this.makeSign(['MINAS'], 520, 620, faceCenter(520, 620), signBody);
+    this.makeSign(['MANSÃO DO', 'PRESIDENTE RAMPIG'], -700, -100, faceCenter(-700, -100), signBody);
+    this.makeSign(['CEMITÉRIO'], -450, 150, 0, signBody);
+    this.makeSign(['FLORESTA'], 420, 200, Math.PI / 2, signBody);
+    this.makeSign(['CIDADE DAS', 'CABRAS'], 750, 500, faceCenter(750, 500), signBody);
+    this.makeSign(['MINAS'], -535, 612, faceCenter(-535, 612), signBody);
     this.makeSign(['PONTE'], 80, -1060, Math.PI, signBody);
   }
 }

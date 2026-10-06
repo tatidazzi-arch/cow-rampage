@@ -1864,6 +1864,34 @@ const towerBox = new THREE.Box3();
     }
     this.buildFenceRect(cx - 6, cz - 12, 10, 8);
     this.buildFenceRect(cx + 8, cz + 14, 10, 8);
+    // barraca da loja de skins (bode vendedor fica atrás do balcão)
+    {
+      const sx = cx - 24, sz = cz + 16;
+      const sgy = this.groundHeight(sx, sz);
+      const woodMat = new THREE.MeshLambertMaterial({ color: 0x7a5a30 });
+      const clothMat = new THREE.MeshLambertMaterial({ color: 0xcc3355, side: THREE.DoubleSide });
+      const shopBody = this.fixedBody(sx, sz);
+      // balcão (sólido: a vaca para aqui)
+      const counter = new THREE.Mesh(new THREE.BoxGeometry(4, 1.2, 1.5), woodMat);
+      counter.position.set(sx, sgy + 0.6, sz);
+      counter.castShadow = true; counter.receiveShadow = true;
+      this.scene.add(counter);
+      this.solidBox(shopBody, 0, sgy + 0.6, 0, 2, 0.6, 0.75);
+      // 4 postes + toldo
+      for (const [ox, oz] of [[-2.2, -1.2], [2.2, -1.2], [-2.2, 1.2], [2.2, 1.2]]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3, 6), woodMat);
+        post.position.set(sx + ox, sgy + 1.5, sz + oz);
+        post.castShadow = true;
+        this.scene.add(post);
+      }
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.15, 3.4), clothMat);
+      roof.position.set(sx, sgy + 3.1, sz);
+      roof.castShadow = true;
+      this.scene.add(roof);
+      const signBody = this.fixedBody(sx, sz);
+      this.makeSign(['LOJA DE', 'SKINS 🐐'], sx, sz - 3, Math.PI, signBody);
+      this.logProp('skinshop', sx, sz);
+    }
   }
 
   private buildMine() {

@@ -19,6 +19,8 @@ export interface NPCPhysics {
   /** destino secreto (ninguém vê): anda até lá e sorteia outro */
   tx: number;
   tz: number;
+  /** vendedor da loja (não anda, não pode ser pego nem atacado) */
+  vendor?: boolean;
   skinSeat: {
     shirt: THREE.Color;
     skin: THREE.Color;

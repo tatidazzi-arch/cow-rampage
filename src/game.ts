@@ -30,6 +30,7 @@ export class Game {
   private npcs: NPCPhysics[] = [];
   private net = new NetManager();
   private remoteCows = new Map<string, RemoteCow>();
+  private shopGoat: NPCPhysics | null = null;
   private netActive = false;
   private netAcc = 0;
 
@@ -349,6 +350,15 @@ constructor() {}
       const gz = GOATS.z + Math.sin(th) * rr;
       placeNPC(gx, gz, 'goat');
     }
+    // bode vendedor da loja de skins (atrás do balcão, paradão)
+    {
+      const vendor = this.npcFactory.create(this.scene, this.physics, GOATS.x - 24, GOATS.z + 18, 'goat');
+      vendor.vendor = true;
+      vendor.tx = GOATS.x - 24;
+      vendor.tz = GOATS.z + 18;
+      this.npcs.push(vendor);
+      this.shopGoat = vendor;
+    }
     // trabalhadores da fazenda (poucos: spawn tranquilo)
     for (let i = 0; i < 6; i++) {
       let gx = BALL.x, gz = BALL.z;
@@ -580,14 +590,37 @@ constructor() {}
 
   private openSkinMenu() {
     document.getElementById('gamemenu')!.style.display = 'none';
+    document.getElementById('lockscreen')!.style.display = 'none';
+    document.getElementById('netmenu')!.style.display = 'none';
+    document.getElementById('configmenu')!.style.display = 'none';
+    const start = document.getElementById('start');
+    if (start) start.style.display = 'flex';
     document.getElementById('skinmenu')!.style.display = 'flex';
+    // no meio do jogo solta o mouse pra clicar na loja
+    if (this.started && document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch { /* ignora */ }
+    }
     this.renderSkins();
   }
 
   private closeSkinMenu() {
     document.getElementById('skinmenu')!.style.display = 'none';
-    document.getElementById('gamemenu')!.style.display = 'flex';
-    this.refreshMenuWallet();
+    if (this.started) {
+      // estava jogando: só fecha a loja e volta pro jogo
+      document.getElementById('start')!.style.display = 'none';
+    } else {
+      document.getElementById('gamemenu')!.style.display = 'flex';
+      this.refreshMenuWallet();
+    }
+  }
+
+  /** Aplica a skin escolhida na hora (vale no meio do jogo). */
+  private applySelectedSkin() {
+    const id = getSelectedId();
+    this.cow.setSkin(skinById(id));
+    this.net.mySkin = id;
   }
 
   private renderSkins() {
@@ -621,6 +654,7 @@ constructor() {}
         }
         addOwned(id);
         setSelectedId(id);
+        this.applySelectedSkin();
         this.renderSkins();
       });
     });
@@ -628,6 +662,7 @@ constructor() {}
       b.addEventListener('click', (e) => {
         e.stopPropagation();
         setSelectedId((b as HTMLElement).dataset['sel'] ?? 'comum');
+        this.applySelectedSkin();
         this.renderSkins();
       });
     });
@@ -650,6 +685,8 @@ constructor() {}
     if (start) start.style.display = 'flex';
     document.getElementById('gamemenu')!.style.display = 'flex';
     document.getElementById('netmenu')!.style.display = 'none';
+    document.getElementById('skinmenu')!.style.display = 'none';
+    document.getElementById('configmenu')!.style.display = 'none';
     this.refreshMenuWallet();
     const netPlay = document.getElementById('netPlay');
     if (netPlay) netPlay.style.display = 'none';
@@ -809,6 +846,8 @@ constructor() {}
     const cz = this.cow.group.position.z;
     if (this.carrying) {
       status = 'Carregando! [E] Canhao | [F] Soltar';
+    } else if (this.shopGoat && Math.hypot(this.shopGoat.body.translation().x - cx, this.shopGoat.body.translation().z - cz) < 6) {
+      status = '[E] Loja de skins 🐐';
     } else {
       const nearCannon = this.world.cannons.some((c) =>
         Math.hypot(c.x - cx, c.z - cz) < 10 && c.loadedNPC !== null);
@@ -884,6 +923,15 @@ constructor() {}
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
 
+    // bode vendedor: abre a loja (vale carregando ou não)
+    if (this.shopGoat) {
+      const t = this.shopGoat.body.translation();
+      if (Math.hypot(t.x - cx, t.z - cz) < 6) {
+        this.openSkinMenu();
+        return;
+      }
+    }
+
     if (this.carrying) {
       const near = this.world.cannons.find((c) => Math.hypot(c.x - cx, c.z - cz) < 10);
       if (near) {
@@ -932,10 +980,11 @@ constructor() {}
       return;
     }
 
-    // pegar pessoa (vale andando, atordoada ou caida)
+    // pegar pessoa (vale andando, atordoada ou caida — menos o vendedor)
     let best: NPCPhysics | null = null;
     let bestDist = 10;
     for (const n of this.npcs) {
+      if (n.vendor) continue;
       if (n.state !== 'walk' && n.state !== 'stunned' && n.state !== 'fallen') continue;
       const t = n.body.translation();
       const d = Math.hypot(t.x - cx, t.z - cz);
@@ -979,7 +1028,7 @@ constructor() {}
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
     for (const n of this.npcs) {
-      if (n.state !== 'walk') continue;
+      if (n.state !== 'walk' || n.vendor) continue;
       const t = n.body.translation();
       const dx = t.x - cx;
       const dz = t.z - cz;
@@ -1236,6 +1285,12 @@ constructor() {}
       const t = n.body.translation();
       switch (n.state) {
         case 'walk': {
+          if (n.vendor) {
+            // vendedor não sai do lugar
+            const v0 = n.body.linvel();
+            n.body.setLinvel({ x: 0, y: v0.y, z: 0 }, true);
+            break;
+          }
           const v = n.body.linvel();
           const dx = n.tx - t.x;
           const dz = n.tz - t.z;
@@ -1258,7 +1313,7 @@ constructor() {}
             n.stateTimer -= dt;
             if (n.stateTimer <= 0) {
               this.setNPCState(n, 'walk');
-              this.pickNPCDestination(n);
+              if (!n.vendor) this.pickNPCDestination(n);
               n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
               n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
             }
@@ -1288,7 +1343,7 @@ constructor() {}
       const cx = this.cow.group.position.x;
       const cz = this.cow.group.position.z;
       const d = Math.hypot(t.x - cx, t.z - cz);
-      if (d < 2.4 && this.carrying !== n && n.state === 'walk') {
+      if (d < 2.4 && this.carrying !== n && !n.vendor && n.state === 'walk') {
         this.setNPCState(n, 'stunned');
         n.stateTimer = 3;
         n.body.setLinvel({ x: (t.x - cx) * 3, y: 3, z: (t.z - cz) * 3 }, true);

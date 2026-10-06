@@ -19,8 +19,7 @@ export interface NPCPhysics {
   /** destino secreto (ninguém vê): anda até lá e sorteia outro */
   tx: number;
   tz: number;
-  /** levitação da bíblia: altura-alvo e timer de faísca */
-  levY: number;
+  /** levitação da bíblia: timer de faísca */
   levT: number;
   /** vendedor da loja (não anda, não pode ser pego nem atacado) */
   vendor?: boolean;
@@ -108,7 +107,7 @@ export class NPCFactory {
       walkDir: worldRand() > 0.5 ? 1 : -1,
       speed: 1.5 + worldRand() * 3,
       tx: x, tz: z,
-      levY: 0, levT: 0,
+      levT: 0,
       skinSeat: { shirt, skin, hair, pants },
     };
     if (npc.kind === 'business') this.ensureBusiness(npc);

@@ -1019,7 +1019,6 @@ constructor() {}
         } else {
           const t = bestB.body.translation();
           this.setNPCState(bestB, 'levitate');
-          bestB.levY = t.y + 6;
           bestB.levT = 0;
           bestB.body.setLinvel({ x: 0, y: 2, z: 0 }, true);
           this.spawnParticles(t.x, t.y + 1, t.z, 12, 0xffe97a);
@@ -1483,11 +1482,10 @@ constructor() {}
         case 'inCannon':
           break;
         case 'levitate': {
-          // bíblia: flutua pra sempre com balanço suave
+          // bíblia: sobe sem parar, ao infinito e além (pra sempre, sem teto)
           n.levT -= dt;
-          const targetY = n.levY + Math.sin(performance.now() / 600) * 0.4;
           const lv = n.body.linvel();
-          n.body.setLinvel({ x: lv.x * 0.9, y: (targetY - t.y) * 3, z: lv.z * 0.9 }, true);
+          n.body.setLinvel({ x: lv.x * 0.9, y: 5, z: lv.z * 0.9 }, true);
           if (n.levT <= 0) {
             n.levT = 0.4;
             this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xffe97a);

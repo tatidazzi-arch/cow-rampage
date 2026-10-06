@@ -226,7 +226,7 @@ constructor() {}
         document.exitPointerLock();
       } catch { /* ignora */ }
     }
-    for (const id of ['hud', 'controls', 'mission', 'scores', 'leaveBtn', 'touchui', 'mousehint', 'gamemenu', 'netmenu', 'skinmenu', 'configmenu']) {
+    for (const id of ['hud', 'controls', 'mission', 'scores', 'leaveBtn', 'touchui', 'mousehint', 'gamemenu', 'netmenu', 'skinmenu', 'configmenu', 'gadgetmenu']) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     }
@@ -452,6 +452,7 @@ constructor() {}
         <button id="cfgBtn">configurações</button>
         <button id="sairBtn">sair</button>
         <button id="skinBtn">🐄 skins</button>
+        <button id="gadgetBtn">🎒 aparelhos</button>
         <p class="controls-mini">WASD mover · Espaço pular · Q cabeçada · 🎮 controle funciona!</p>
         <p class="ver">v0.0.1 · multiplayer sem conta</p>
       </div>
@@ -468,6 +469,12 @@ constructor() {}
         <div id="skinlist"></div>
         <div id="skinError"></div>
         <button id="skinBack">VOLTAR</button>
+      </div>
+      <div id="gadgetmenu" style="display:none">
+        <h1>APARELHOS</h1>
+        <p>O que vai nas costas da vaca (1/2/3 troca no jogo)</p>
+        <div id="gadgetlist"></div>
+        <button id="gadgetBack">VOLTAR</button>
       </div>
       <div id="netmenu" style="display:none">
         <h1>MULTIPLAYER</h1>
@@ -499,6 +506,14 @@ constructor() {}
     document.getElementById('skinBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.openSkinMenu();
+    });
+    document.getElementById('gadgetBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openGadgetMenu();
+    });
+    document.getElementById('gadgetBack')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeGadgetMenu();
     });
     document.getElementById('cfgBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -597,6 +612,7 @@ constructor() {}
     document.getElementById('lockscreen')!.style.display = 'none';
     document.getElementById('netmenu')!.style.display = 'none';
     document.getElementById('configmenu')!.style.display = 'none';
+    document.getElementById('gadgetmenu')!.style.display = 'none';
     const start = document.getElementById('start');
     if (start) start.style.display = 'flex';
     document.getElementById('skinmenu')!.style.display = 'flex';
@@ -609,6 +625,47 @@ constructor() {}
     this.renderSkins();
   }
 
+  private openGadgetMenu() {
+    for (const id of ['gamemenu', 'lockscreen', 'netmenu', 'configmenu', 'skinmenu']) {
+      document.getElementById(id)!.style.display = 'none';
+    }
+    const start = document.getElementById('start');
+    if (start) start.style.display = 'flex';
+    document.getElementById('gadgetmenu')!.style.display = 'flex';
+    this.renderGadgets();
+  }
+
+  private closeGadgetMenu() {
+    document.getElementById('gadgetmenu')!.style.display = 'none';
+    if (this.started) {
+      document.getElementById('start')!.style.display = 'none';
+    } else {
+      document.getElementById('gamemenu')!.style.display = 'flex';
+      this.refreshMenuWallet();
+    }
+  }
+
+  private renderGadgets() {
+    const listEl = document.getElementById('gadgetlist');
+    if (!listEl) return;
+    listEl.innerHTML = this.GADGETS.map((id) => {
+      const info = this.GADGET_INFO[id]!;
+      const sel = this.loadGadget() === id;
+      const btn = sel
+        ? '<span class="sel">EM USO ✅</span>'
+        : `<button data-gadget="${id}">USAR</button>`;
+      return `<div class="skinrow"><span class="swatch">${info.icon}</span><span class="sname">${info.name}<br><small>${info.desc}</small></span>${btn}</div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-gadget]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = (b as HTMLElement).dataset['gadget'] ?? 'sela';
+        if (id === 'jetpack' || id === 'biblia') this.setGadget(id);
+        else this.setGadget('sela');
+        this.renderGadgets();
+      });
+    });
+  }
   private closeSkinMenu() {
     document.getElementById('skinmenu')!.style.display = 'none';
     if (this.started) {
@@ -691,6 +748,7 @@ constructor() {}
     document.getElementById('netmenu')!.style.display = 'none';
     document.getElementById('skinmenu')!.style.display = 'none';
     document.getElementById('configmenu')!.style.display = 'none';
+    document.getElementById('gadgetmenu')!.style.display = 'none';
     this.refreshMenuWallet();
     const netPlay = document.getElementById('netPlay');
     if (netPlay) netPlay.style.display = 'none';
@@ -758,7 +816,7 @@ constructor() {}
     this.input.joyF = 0;
     this.input.joyS = 0;
     this.input.takePadDelta();
-    this.setGadget('sela');
+    this.setGadget(this.loadGadget());
     this.netActive = multiplayer && this.net.connected;
     // skin escolhida na loja (vale pra vaca local e pros amigos verem)
     const mySkin = getSelectedId();
@@ -1065,9 +1123,25 @@ constructor() {}
   /** Aparelhos das costas: sela (pegar gente), jetpack (voar), bíblia (levitar). */
   private gadget: 'sela' | 'jetpack' | 'biblia' = 'sela';
   private readonly GADGETS = ['sela', 'jetpack', 'biblia'] as const;
+  private readonly GADGET_INFO: Record<string, { name: string; icon: string; desc: string }> = {
+    sela: { name: 'Sela', icon: '🐄', desc: 'pegar gente no colo' },
+    jetpack: { name: 'Jetpack Atômico', icon: '🚀', desc: 'segure ESPAÇO pra voar' },
+    biblia: { name: 'Bíblia', icon: '📖', desc: 'levita a pessoa pra sempre' },
+  };
+
+  private loadGadget(): 'sela' | 'jetpack' | 'biblia' {
+    try {
+      const id = window.localStorage.getItem('cowrampage.gadget') ?? 'sela';
+      if (id === 'jetpack' || id === 'biblia') return id;
+    } catch { /* padrão */ }
+    return 'sela';
+  }
 
   private setGadget(g: 'sela' | 'jetpack' | 'biblia') {
     this.gadget = g;
+    try {
+      window.localStorage.setItem('cowrampage.gadget', g);
+    } catch { /* ignora */ }
     this.cow.setGadgetVisual(g);
     if (g !== 'jetpack') this.cow.setFlame(false);
   }

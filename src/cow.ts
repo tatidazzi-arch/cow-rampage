@@ -21,6 +21,15 @@ export class Cow {
   flipT = 0;
   private flipCD = 0;
 
+  // --- De barriga pra cima (queda de muito alto) ---
+  /** > 0 = caída de barriga pra cima (segundos restantes) */
+  bellyUpT = 0;
+  private readonly bellyTotal = 2.2;
+  private bellyPhase = 0;
+  private bellyAngle = 0;
+  /** altura visual do modelo (medida no load; cai pro padrão se falhar) */
+  private modelTop = 2.2 * 2;
+
   // Modelo FBX (carregado de forma assincrona; procedural fica de fallback)
   modelReady = false;
   private mixer: THREE.AnimationMixer | null = null;
@@ -184,6 +193,9 @@ export class Cow {
 
       this.mixer = spawned.mixer;
       this.clips = spawned.clips;
+      // altura real do modelo (pro dorso encostar no chão quando deitada)
+      const top = new THREE.Box3().setFromObject(spawned.model).max.y;
+      if (top > 0) this.modelTop = top;
       this.modelReady = true;
       tintCowModel(spawned.model, this.skin);
       this.playClip('idle', 1);
@@ -220,6 +232,12 @@ export class Cow {
   update(dt: number, speed: number, airborne: boolean): void {
     if (this.mixer) this.mixer.update(dt);
     this.flipCD -= dt;
+    this.updateBelly(dt);
+    if (this.bellyUpT > 0) {
+      // caída de barriga pra cima: sem flip e sem andar, só balança até levantar
+      if (this.modelReady) this.playClip('idle', 1);
+      return;
+    }
     if (this.flipT > 0) {
       this.flipT += dt / 0.7;
       if (this.flipT >= 1) {
@@ -389,9 +407,55 @@ export class Cow {
     }
   }
 
+  /** Tomba de barriga pra cima (chamado pelo Game numa queda de muito alto). */
+  startBellyUp() {
+    if (this.bellyUpT > 0) return;
+    this.bellyUpT = this.bellyTotal;
+    this.bellyPhase = 0;
+  }
+
+  /** Levanta na hora (aperta pular depois de um tempo caída). */
+  getUp() {
+    this.bellyUpT = 0;
+  }
+
+  get bellyUp(): boolean {
+    return this.bellyUpT > 0;
+  }
+
+  /** Rola pra 180° (barriga pra cima) e balança de um lado pro outro até levantar. */
+  private updateBelly(dt: number): void {
+    if (this.bellyUpT > 0) {
+      this.bellyUpT -= dt;
+      this.bellyPhase += dt * 7;
+      const decay = Math.min(1, this.bellyUpT / this.bellyTotal + 0.25);
+      const target = Math.PI + Math.sin(this.bellyPhase) * 0.45 * decay;
+      this.bellyAngle += (target - this.bellyAngle) * Math.min(1, dt * 16);
+      this.flipT = 0;
+      this.group.rotation.x = 0;
+    } else if (this.bellyAngle > 0.001) {
+      // recuperação: volta suave pra de pé
+      this.bellyAngle += (0 - this.bellyAngle) * Math.min(1, dt * 10);
+      if (this.bellyAngle < 0.01) {
+        this.bellyAngle = 0;
+        this.group.rotation.z = 0;
+        return;
+      }
+    } else {
+      return;
+    }
+    this.group.rotation.z = this.bellyAngle;
+  }
+
   syncMesh() {
     const t = this.body.translation();
-    this.group.position.set(t.x, t.y - HALF_H, t.z);
+    this.group.position.set(t.x, t.y - HALF_H + this.bellyLift(), t.z);
     this.group.rotation.y = this.yaw;
+  }
+
+  /** Deitada, o dorso encosta no chão: sobe o visual conforme rola até 180°. */
+  private bellyLift(): number {
+    if (this.bellyAngle <= 0.001) return 0;
+    return (this.modelTop * (1 - Math.cos(this.bellyAngle))) / 2;
   }
 }

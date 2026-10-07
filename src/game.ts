@@ -50,6 +50,8 @@ export class Game {
   private wallRunTimer = 0;
   private wallRunDir = new THREE.Vector3();
   private wallRunNormal = new THREE.Vector3();
+  /** maior velocidade de queda desde o último toque no chão (tombo) */
+  private fallV = 0;
   // --- Pool de partículas: 1 único InstancedMesh (antes: 1 Mesh+BoxGeometry por
   // faísca, criada a cada frame pelo jetpack e nunca liberada -> GC + vazamento GPU).
   private particleIM: THREE.InstancedMesh | null = null;
@@ -1264,6 +1266,23 @@ constructor() {}
     const running = this.input.isDown('ShiftLeft', 'ShiftRight');
     const speed = running ? 11 : 6;
 
+    // CAÍDA ALTA: de barriga pra cima, balançando de um lado pro outro.
+    // Controles travados (só freia); levanta sozinha ou apertando pular.
+    if (this.cow.bellyUp) {
+      const b = this.cow.body;
+      const v = b.linvel();
+      const f = Math.max(0, 1 - dt * 4);
+      b.setLinvel({ x: v.x * f, y: v.y, z: v.z * f }, true);
+      if (this.cow.bellyUpT < 1.4 && this.input.consumeOnce('Space')) {
+        this.cow.getUp();
+        this.input.rumble(0.6, 0.4, 150);
+      }
+      this.cow.syncMesh();
+      this.cow.update(dt, 0, false);
+      this.updateCarried(dt);
+      return;
+    }
+
     const fwd = this._fwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
     const rgt = this._rgt.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
     const move = this._move.set(0, 0, 0);
@@ -1347,8 +1366,19 @@ constructor() {}
       const hit = this.physics.castRay(ray, 1.1 * COW_SCALE + 0.4, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, this.cow.body);
       const wasGrounded = this.cow.grounded;
       this.cow.grounded = hit !== null && !inWater;
-      if (this.cow.grounded && !wasGrounded) {
-        this.cow.resetJumps();
+      if (!this.cow.grounded) {
+        // guarda a maior velocidade de queda pra medir o tombo no pouso
+        this.fallV = Math.max(this.fallV, -currentVel.y);
+      } else {
+        if (!wasGrounded && this.fallV > 16) {
+          // caiu de MUITO alto: tomba de barriga pra cima
+          this.cow.startBellyUp();
+          this.spawnParticles(t.x, t.y - 1.4, t.z, 18, 0xd9c27a);
+          this.input.rumble(1, 0.9, 400);
+          if (this.carrying) this.dropCarried();
+        }
+        this.fallV = 0;
+        if (!wasGrounded) this.cow.resetJumps();
       }
     } else {
       // WALL RUN: corre ao longo da parede, grudado pela velocidade (sem teleporte)

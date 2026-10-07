@@ -822,7 +822,7 @@ constructor() {}
     const others = list.filter((p) => !p.me);
     const dbg = this.net.debugStatus();
     let html = `<div>Sala: <b>${this.net.roomCode}</b> 🌐${list.length}</div>`;
-    html += `<div style="font-size:13px;color:#999">📡 sinal ${dbg.trackersOpen}/${dbg.trackersTotal} · P2P ${dbg.peers} · vistos ${dbg.known}</div>`;
+    html += `<div style="font-size:13px;color:#999">📡 sinal ${dbg.trackersOpen}/${dbg.trackersTotal} · direto ${dbg.peers} · relay ${dbg.relay ? 'sim' : 'não'} · vistos ${dbg.known}</div>`;
     html += list.map((p) =>
       `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
     ).join('');

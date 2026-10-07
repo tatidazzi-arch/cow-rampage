@@ -1,21 +1,35 @@
 import * as THREE from 'three';
 import Peer from 'peerjs';
 import type { DataConnection } from 'peerjs';
+import mqtt from 'mqtt';
+import type { MqttClient } from 'mqtt';
 import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
 import { skinById, tintCowModel } from './skins';
 
-/** Prefixo dos IDs no servidor de sinalização pública do PeerJS (0.peerjs.com). */
+/** Prefixo dos tópicos/ids no relay e no servidor de sinalização. */
 const APP_PREFIX = 'cowr3';
 
-/** STUN público: só descobre o endereço externo; os dados vão direto P2P (RTCDataChannel). */
+/** Brokers MQTT públicos (WebSocket): descoberta + relay quando o P2P não passa no NAT.
+ *  Sem cadastro. Tenta em ordem se algum cair. */
+const RELAY_BROKERS = [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt',
+];
+
+/** STUN público: descobre o endereço externo p/ conexão DIRETA quando o NAT deixa. */
 const PEER_OPTS = {
   config: {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
     ],
   },
 };
+
+/** Query params de diagnóstico: ?nowebrtc (só relay) e ?norelay (só P2P). */
+const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
 
 export interface CowNetState {
   [key: string]: number | string | boolean;
@@ -55,13 +69,19 @@ export interface ScoreEntry {
   me: boolean;
 }
 
-/** Envelope único que trafega nos data channels. */
+/** Envelope que trafega nos dois transportes (WebRTC direto e relay MQTT). */
 type NetMsg =
   | { t: 'hello'; p: PlayerProfile }
-  | { t: 'roster'; ids: string[] }
-  | { t: 'peer'; id: string }
   | { t: 'cow'; s: CowNetState }
   | { t: 'event'; e: NetEventMsg };
+
+interface Wire {
+  /** id de quem mandou */
+  f: string;
+  /** id do destinatário ('' = todos) */
+  to: string;
+  m: NetMsg;
+}
 
 /** Vaca de outro jogador: mesmo modelo FBX da vaca local (+fallback em caixa). */
 export class RemoteCow {
@@ -250,18 +270,17 @@ export class RemoteCow {
 }
 
 /**
- * Multiplayer P2P via PeerJS (WebRTC).
+ * Multiplayer híbrido (funciona em QUALQUER rede):
  *
- * Sinalização: servidor público do PeerJS só troca as ofertas SDP/ICE.
- * Dados (posição, eventos): RTCDataChannel direto entre os navegadores.
+ * 1) Relay MQTT (WebSocket 443/8084/8884) — sempre ligado. É por onde a turma se
+ *    DESCOBRE (hello no tópico da sala) e por onde as mensagens vão quando o P2P
+ *    não consegue furar o NAT (ex.: 4G/CGNAT, NAT simétrico).
+ * 2) WebRTC direto (PeerJS/DataChannel) — melhor esforço, em paralelo. Quando abre,
+ *    as mensagens daquele jogador passam a ir direto (menos latência), e o relay
+ *    fica só de descoberta/keepalive.
  *
- * Sala = ID fixo `cowr3-<sala>-lobby` no servidor de sinalização:
- *  - o 1º a entrar reivindica esse ID e vira anfitrião (só ele distribui a lista);
- *  - os demais criam um ID aleatório e discam para o lobby;
- *  - o anfitrião manda a lista de participantes (`roster`) e todos discam entre si
- *    -> malha completa (cada jogador conectado a todos), sem passar pelo anfitrião.
- * Se os dois lados discarem ao mesmo tempo, `finalizeConn` mantém a conexão
- * iniciada pelo ID lexicograficamente menor (os dois lados decidem o mesmo).
+ * Sem cadastro/API key: usa a nuvem pública do PeerJS para a sinalização e brokers
+ * MQTT públicos para o relay.
  */
 export class NetManager {
   roomCode = '';
@@ -274,14 +293,19 @@ export class NetManager {
 
   private peer: Peer | null = null;
   private conns = new Map<string, DataConnection>();
-  /** conexões que NÓS iniciamos (pra desempatar discagem simultânea). */
+  /** conexões que NÓS iniciamos (desempate de discagem simultânea). */
   private outgoing = new WeakSet<DataConnection>();
   private dialing = new Set<string>();
   private profiles = new Map<string, PlayerProfile & { score: number }>();
-  private isHost = false;
+  private lastSeen = new Map<string, number>();
+  private relay: MqttClient | null = null;
+  private relayTopic = '';
+  private relayConnected = false;
+  private relayBrokerIdx = 0;
   private myId = '';
   private joinGen = 0;
   private helloTimer = 0;
+  private sweepTimer = 0;
   private maxSeen = 1;
   private aloneSince = 0;
 
@@ -289,40 +313,72 @@ export class NetManager {
     return { name: this.myName, color: this.myColor, skin: this.mySkin };
   }
 
-  private lobbyId(): string {
-    return `${APP_PREFIX}-${this.roomCode}-lobby`;
-  }
-
   get id(): string {
     return this.myId;
   }
 
   get connected(): boolean {
-    return this.peer !== null && !this.peer.destroyed;
+    return this.relayConnected || (this.peer !== null && !this.peer.destroyed);
   }
 
   peerCount(): number {
-    return this.conns.size + 1;
+    return this.profiles.size + 1;
   }
 
-  /** Abre um Peer e resolve no `open`; rejeita se o ID já estiver em uso ou sem rede. */
-  private openPeer(id: string, host: boolean, gen: number): Promise<void> {
+  /** true se dá pra tentar P2P direto (usado só no diagnóstico). */
+  get directCount(): number {
+    return this.conns.size;
+  }
+
+  async join(code: string, name: string, color: number): Promise<void> {
+    await this.leave();
+    const gen = ++this.joinGen;
+    this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
+    this.myName = name.trim().slice(0, 12) || 'Jimmy';
+    this.myColor = color;
+    this.myId = `${APP_PREFIX}-${this.roomCode}-${Math.random().toString(36).slice(2, 10)}`;
+    this.relayTopic = `${APP_PREFIX}/${this.roomCode}/all`;
+    this.profiles.clear();
+    this.lastSeen.clear();
+    this.maxSeen = 1;
+    this.aloneSince = 0;
+
+    const wantWebrtc = !(params && params.has('nowebrtc'));
+    const wantRelay = !(params && params.has('norelay'));
+
+    // 1) relay primeiro: descoberta garantida em qualquer rede
+    if (wantRelay) this.openRelay(gen);
+    // 2) WebRTC em paralelo: se furar o NAT, vira o caminho rápido
+    if (wantWebrtc) {
+      this.openPeer(this.myId, gen).catch((err) => {
+        console.warn('[net] WebRTC indisponível, seguindo só no relay:', String((err && err.type) || err));
+      });
+    }
+
+    window.clearInterval(this.helloTimer);
+    this.helloTimer = window.setInterval(() => {
+      this.publish({ f: this.myId, to: '', m: { t: 'hello', p: this.profile() } });
+    }, 6000);
+    window.clearInterval(this.sweepTimer);
+    this.sweepTimer = window.setInterval(() => this.sweep(), 5000);
+    if (this.onPeers) this.onPeers();
+  }
+
+  // ---------- WebRTC direto (PeerJS) ----------
+
+  private openPeer(id: string, gen: number): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const peer = new Peer(id, PEER_OPTS);
       let settled = false;
       peer.on('open', (openId: string) => {
         if (gen !== this.joinGen) {
           try { peer.destroy(); } catch { /* ignora */ }
-          if (!settled) {
-            settled = true;
-            reject(new Error('stale'));
-          }
+          if (!settled) { settled = true; reject(new Error('stale')); }
           return;
         }
         settled = true;
         this.peer = peer;
         this.myId = openId;
-        this.isHost = host;
         resolve();
       });
       peer.on('error', (err) => {
@@ -333,7 +389,6 @@ export class NetManager {
           reject(err);
           return;
         }
-        // erro depois de conectado: a malha P2P continua de pé
         console.warn('[net] aviso do PeerJS:', type);
       });
       peer.on('connection', (conn) => this.attach(conn));
@@ -344,63 +399,22 @@ export class NetManager {
     });
   }
 
-  async join(code: string, name: string, color: number): Promise<void> {
-    // teardown completo da sala anterior antes de abrir a nova
-    await this.leave();
-    const gen = ++this.joinGen;
-    this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
-    this.myName = name.trim().slice(0, 12) || 'Jimmy';
-    this.myColor = color;
-    this.profiles.clear();
-    this.maxSeen = 1;
-    this.aloneSince = 0;
-
-    const lobby = this.lobbyId();
-    try {
-      // tenta ser o anfitrião reivindicando o ID fixo da sala
-      await this.openPeer(lobby, true, gen);
-      console.log('[net] sala criada (anfitrião):', lobby);
-    } catch {
-      if (gen !== this.joinGen) return;
-      // sala já existe: vira cliente e disca pro anfitrião
-      await this.openPeer(`${APP_PREFIX}-${this.roomCode}-${Math.random().toString(36).slice(2, 10)}`, false, gen);
-      this.connectTo(lobby);
-      console.log('[net] entrou como cliente na sala', this.roomCode);
-    }
-    if (gen !== this.joinGen) return;
-    // reanuncia presença a cada 10s (hello pode se perder)
-    window.clearInterval(this.helloTimer);
-    this.helloTimer = window.setInterval(() => {
-      if (!this.peer) return;
-      this.sendHello();
-      if (this.onPeers) this.onPeers();
-    }, 10000);
-    this.sendHello();
-    if (this.onPeers) this.onPeers();
-  }
-
-  /** Liga os handlers de uma conexão (entrante ou discada por nós). */
   private attach(conn: DataConnection): void {
     conn.on('open', () => {
       this.finalizeConn(conn);
-      this.sendTo(conn, { t: 'hello', p: this.profile() });
+      this.sendDirect(conn, { t: 'hello', p: this.profile() });
     });
     conn.on('data', (raw) => {
-      // conexão duplicada já descartada? ignora os dados dela
       if (this.conns.get(conn.peer) !== conn) return;
-      this.onData(conn.peer, raw as NetMsg);
+      this.onWire(raw as Wire);
     });
-    conn.on('close', () => {
-      if (this.conns.get(conn.peer) === conn) this.dropPeer(conn.peer);
-    });
-    conn.on('error', () => {
-      if (this.conns.get(conn.peer) === conn) this.dropPeer(conn.peer);
-    });
+    conn.on('close', () => this.dropConn(conn.peer));
+    conn.on('error', () => this.dropConn(conn.peer));
   }
 
   private connectTo(id: string): void {
     const peer = this.peer;
-    if (!peer || !id || id === this.myId || this.conns.has(id) || this.dialing.has(id)) return;
+    if (!peer || peer.destroyed || !id || id === this.myId || this.conns.has(id) || this.dialing.has(id)) return;
     this.dialing.add(id);
     try {
       const conn = peer.connect(id, { reliable: true });
@@ -432,82 +446,160 @@ export class NetManager {
     if (this.onPeers) this.onPeers();
   }
 
-  private onData(from: string, msg: NetMsg): void {
-    switch (msg.t) {
-      case 'hello': {
-        const prev = this.profiles.get(from);
-        this.profiles.set(from, {
-          name: String(msg.p.name || '?').slice(0, 12),
-          color: Number(msg.p.color) || 0xffffff,
-          skin: typeof msg.p.skin === 'string' ? msg.p.skin : 'comum',
-          score: prev ? prev.score : 0,
-        });
-        this.maxSeen = Math.max(this.maxSeen, this.profiles.size + 1);
-        if (this.isHost) {
-          // manda a lista completa pro recém-chegado e avisa os antigos
-          const c = this.conns.get(from);
-          if (c) this.sendRoster(c);
-          for (const [id, other] of this.conns) {
-            if (id === from) continue;
-            this.sendTo(other, { t: 'peer', id: from });
-          }
-        }
-        if (this.onPeers) this.onPeers();
-        break;
+  /** Só descarta a conexão direta; o jogador continua via relay. */
+  private dropConn(id: string): void {
+    if (!this.conns.delete(id)) return;
+    this.dialing.delete(id);
+    if (this.onPeers) this.onPeers();
+  }
+
+  // ---------- Relay MQTT (descoberta + fallback) ----------
+
+  private openRelay(gen: number): void {
+    this.closeRelay();
+    const url = RELAY_BROKERS[this.relayBrokerIdx % RELAY_BROKERS.length]!;
+    let client: MqttClient;
+    try {
+      client = mqtt.connect(url, {
+        clientId: this.myId,
+        clean: true,
+        reconnectPeriod: 4000,
+        connectTimeout: 15000,
+        keepalive: 30,
+      });
+    } catch (err) {
+      console.warn('[net] relay falhou:', err);
+      return;
+    }
+    this.relay = client;
+    this.relayConnected = false;
+    client.on('connect', () => {
+      if (gen !== this.joinGen || this.relay !== client) return;
+      this.relayConnected = true;
+      console.log('[net] relay conectado:', url);
+      client.subscribe(this.relayTopic, { qos: 0 }, () => {
+        this.publish({ f: this.myId, to: '', m: { t: 'hello', p: this.profile() } });
+      });
+      if (this.onPeers) this.onPeers();
+    });
+    client.on('message', (topic, payload) => {
+      if (gen !== this.joinGen || this.relay !== client) return;
+      if (topic !== this.relayTopic) return;
+      let w: Wire | null = null;
+      try { w = JSON.parse(String(payload)) as Wire; } catch { return; }
+      if (!w || typeof w.f !== 'string' || w.f === this.myId) return;
+      if (w.to && w.to !== this.myId) return;
+      this.onWire(w);
+    });
+    client.on('close', () => { if (this.relay === client) this.relayConnected = false; });
+    client.on('error', () => { /* mqtt.js reconecta sozinho */ });
+    // se o broker não responder, tenta o próximo da lista
+    window.setTimeout(() => {
+      if (gen !== this.joinGen || this.relay !== client) return;
+      if (!this.relayConnected) {
+        console.warn('[net] broker sem resposta, tentando o próximo...');
+        this.relayBrokerIdx++;
+        this.openRelay(gen);
       }
-      case 'roster': {
-        for (const id of msg.ids) this.connectTo(id);
-        break;
-      }
-      case 'peer': {
-        // alguém novo entrou: disca (o outro lado também; finalizeConn desempata)
-        this.connectTo(msg.id);
-        break;
-      }
-      case 'cow': {
-        if (this.handleCow) this.handleCow(msg.s, from);
-        break;
-      }
-      case 'event': {
-        const pr = this.profiles.get(from);
-        if (this.onEvent) this.onEvent(msg.e, pr ? pr.name : '?');
-        break;
-      }
+    }, 14000);
+  }
+
+  private closeRelay(): void {
+    const c = this.relay;
+    this.relay = null;
+    this.relayConnected = false;
+    if (c) {
+      try { c.end(true); } catch { /* ignora */ }
     }
   }
 
-  private sendRoster(conn: DataConnection): void {
-    const ids = new Set<string>(this.conns.keys());
-    ids.add(this.myId);
-    this.sendTo(conn, { t: 'roster', ids: [...ids] });
+  private publish(w: Wire): void {
+    const c = this.relay;
+    if (!c || !this.relayConnected) return;
+    try { c.publish(this.relayTopic, JSON.stringify(w), { qos: 0 }); } catch { /* ignora */ }
   }
 
-  private sendTo(conn: DataConnection, msg: NetMsg): void {
+  private sendDirect(conn: DataConnection, m: NetMsg): void {
     try {
-      if (conn.open) void conn.send(msg);
+      if (conn.open) void conn.send({ f: this.myId, to: conn.peer, m } satisfies Wire);
     } catch { /* conexão fechando */ }
   }
 
-  private broadcast(msg: NetMsg): void {
-    for (const c of this.conns.values()) this.sendTo(c, msg);
+  private sendTo(peerId: string, m: NetMsg): void {
+    const conn = this.conns.get(peerId);
+    if (conn && conn.open) {
+      this.sendDirect(conn, m);
+      return;
+    }
+    this.publish({ f: this.myId, to: peerId, m });
+  }
+
+  private broadcast(m: NetMsg): void {
+    for (const id of this.profiles.keys()) this.sendTo(id, m);
+  }
+
+  private onWire(w: Wire): void {
+    const from = w.f;
+    this.lastSeen.set(from, Date.now());
+    const known = this.profiles.has(from);
+    if (w.m.t === 'hello') {
+      const prev = this.profiles.get(from);
+      this.profiles.set(from, {
+        name: String(w.m.p.name || '?').slice(0, 12),
+        color: Number(w.m.p.color) || 0xffffff,
+        skin: typeof w.m.p.skin === 'string' ? w.m.p.skin : 'comum',
+        score: prev ? prev.score : 0,
+      });
+      this.maxSeen = Math.max(this.maxSeen, this.profiles.size + 1);
+      if (!known) {
+        // novo jogador: tenta abrir o caminho direto (dedupe cuida da discagem dupla)
+        this.connectTo(from);
+        if (this.onPeers) this.onPeers();
+      }
+      return;
+    }
+    if (!known) {
+      this.profiles.set(from, { name: '?', color: 0xffffff, skin: 'comum', score: 0 });
+      this.lastSeen.set(from, Date.now());
+      this.connectTo(from);
+    }
+    if (w.m.t === 'cow') {
+      if (this.handleCow) this.handleCow(w.m.s, from);
+      return;
+    }
+    if (w.m.t === 'event') {
+      const pr = this.profiles.get(from);
+      if (this.onEvent) this.onEvent(w.m.e, pr ? pr.name : '?');
+    }
+  }
+
+  /** Remove quem passou 30s sem dar sinal (e sem conexão direta aberta). */
+  private sweep(): void {
+    const now = Date.now();
+    for (const id of [...this.profiles.keys()]) {
+      const last = this.lastSeen.get(id) ?? 0;
+      const direct = this.conns.get(id);
+      if (now - last > 30000 && !(direct && direct.open)) this.dropPeer(id);
+    }
   }
 
   private dropPeer(id: string): void {
-    if (!this.conns.delete(id)) return;
-    this.dialing.delete(id);
     this.profiles.delete(id);
+    this.lastSeen.delete(id);
+    this.dropConn(id);
     if (this.onRemoteLeave) this.onRemoteLeave(id);
     if (this.onPeers) this.onPeers();
   }
 
-  private sendHello(): void {
-    this.broadcast({ t: 'hello', p: this.profile() });
+  private handleCow: ((s: CowNetState, peerId: string) => void) | null = null;
+
+  onCowState(cb: (s: CowNetState, peerId: string) => void): void {
+    this.handleCow = cb;
   }
 
   /** Força reanúncio (ex.: ao voltar pra aba no celular). */
   poke(): void {
-    if (!this.peer) return;
-    this.sendHello();
+    this.publish({ f: this.myId, to: '', m: { t: 'hello', p: this.profile() } });
     if (this.onPeers) this.onPeers();
   }
 
@@ -523,12 +615,6 @@ export class NetManager {
     if (!this.aloneSince) this.aloneSince = Date.now();
     if (Date.now() - this.aloneSince < 20000) return '';
     return '⚠️ Conexão caiu? Toque em 🔄 RECONECTAR.';
-  }
-
-  private handleCow: ((s: CowNetState, peerId: string) => void) | null = null;
-
-  onCowState(cb: (s: CowNetState, peerId: string) => void): void {
-    this.handleCow = cb;
   }
 
   sendState(s: CowNetState): void {
@@ -556,14 +642,16 @@ export class NetManager {
     return this.profiles.get(peerId) ?? null;
   }
 
-  /** Diagnóstico do lobby: sinal PeerJS + conexões P2P + perfis conhecidos. */
-  debugStatus(): { trackersOpen: number; trackersTotal: number; peers: number; known: number } {
+  /** Diagnóstico: sinal (PeerJS + relay) e nº de conexões diretas. */
+  debugStatus(): { trackersOpen: number; trackersTotal: number; peers: number; known: number; relay: boolean } {
     const signaling = this.peer && !this.peer.destroyed && !this.peer.disconnected ? 1 : 0;
+    const relay = this.relayConnected ? 1 : 0;
     return {
-      trackersOpen: signaling,
-      trackersTotal: 1,
+      trackersOpen: signaling + relay,
+      trackersTotal: 2,
       peers: this.conns.size,
       known: this.profiles.size + 1,
+      relay: this.relayConnected,
     };
   }
 
@@ -580,7 +668,10 @@ export class NetManager {
     this.joinGen++;
     window.clearInterval(this.helloTimer);
     this.helloTimer = 0;
+    window.clearInterval(this.sweepTimer);
+    this.sweepTimer = 0;
     this.profiles.clear();
+    this.lastSeen.clear();
     this.maxSeen = 1;
     this.aloneSince = 0;
     for (const c of this.conns.values()) {
@@ -588,9 +679,9 @@ export class NetManager {
     }
     this.conns.clear();
     this.dialing.clear();
+    this.closeRelay();
     const p = this.peer;
     this.peer = null;
-    this.isHost = false;
     this.myId = '';
     if (p && !p.destroyed) {
       try { p.destroy(); } catch { /* ignora */ }

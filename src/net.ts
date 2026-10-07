@@ -1,10 +1,21 @@
 import * as THREE from 'three';
-import { joinRoom, selfId, getRelaySockets } from '@trystero-p2p/torrent';
-import type { Room } from '@trystero-p2p/torrent';
+import Peer from 'peerjs';
+import type { DataConnection } from 'peerjs';
 import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
 import { skinById, tintCowModel } from './skins';
 
-const APP_ID = 'cow-rampage-3d-v1';
+/** Prefixo dos IDs no servidor de sinalização pública do PeerJS (0.peerjs.com). */
+const APP_PREFIX = 'cowr3';
+
+/** STUN público: só descobre o endereço externo; os dados vão direto P2P (RTCDataChannel). */
+const PEER_OPTS = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ],
+  },
+};
 
 export interface CowNetState {
   [key: string]: number | string | boolean;
@@ -43,6 +54,14 @@ export interface ScoreEntry {
   score: number;
   me: boolean;
 }
+
+/** Envelope único que trafega nos data channels. */
+type NetMsg =
+  | { t: 'hello'; p: PlayerProfile }
+  | { t: 'roster'; ids: string[] }
+  | { t: 'peer'; id: string }
+  | { t: 'cow'; s: CowNetState }
+  | { t: 'event'; e: NetEventMsg };
 
 /** Vaca de outro jogador: mesmo modelo FBX da vaca local (+fallback em caixa). */
 export class RemoteCow {
@@ -230,8 +249,21 @@ export class RemoteCow {
   }
 }
 
+/**
+ * Multiplayer P2P via PeerJS (WebRTC).
+ *
+ * Sinalização: servidor público do PeerJS só troca as ofertas SDP/ICE.
+ * Dados (posição, eventos): RTCDataChannel direto entre os navegadores.
+ *
+ * Sala = ID fixo `cowr3-<sala>-lobby` no servidor de sinalização:
+ *  - o 1º a entrar reivindica esse ID e vira anfitrião (só ele distribui a lista);
+ *  - os demais criam um ID aleatório e discam para o lobby;
+ *  - o anfitrião manda a lista de participantes (`roster`) e todos discam entre si
+ *    -> malha completa (cada jogador conectado a todos), sem passar pelo anfitrião.
+ * Se os dois lados discarem ao mesmo tempo, `finalizeConn` mantém a conexão
+ * iniciada pelo ID lexicograficamente menor (os dois lados decidem o mesmo).
+ */
 export class NetManager {
-  room: Room | null = null;
   roomCode = '';
   myName = 'Jimmy';
   myColor = 0xffcc00;
@@ -240,21 +272,241 @@ export class NetManager {
   onPeers: (() => void) | null = null;
   onRemoteLeave: ((peerId: string) => void) | null = null;
 
-  private cowAction: { send: (s: CowNetState) => Promise<void> } | null = null;
-  private helloAction: { send: (p: PlayerProfile) => Promise<void> } | null = null;
-  private eventAction: { send: (e: NetEventMsg) => Promise<void> } | null = null;
+  private peer: Peer | null = null;
+  private conns = new Map<string, DataConnection>();
+  /** conexões que NÓS iniciamos (pra desempatar discagem simultânea). */
+  private outgoing = new WeakSet<DataConnection>();
+  private dialing = new Set<string>();
   private profiles = new Map<string, PlayerProfile & { score: number }>();
+  private isHost = false;
+  private myId = '';
+  private joinGen = 0;
   private helloTimer = 0;
   private maxSeen = 1;
   private aloneSince = 0;
 
+  private profile(): PlayerProfile {
+    return { name: this.myName, color: this.myColor, skin: this.mySkin };
+  }
+
+  private lobbyId(): string {
+    return `${APP_PREFIX}-${this.roomCode}-lobby`;
+  }
+
+  get id(): string {
+    return this.myId;
+  }
+
+  get connected(): boolean {
+    return this.peer !== null && !this.peer.destroyed;
+  }
+
+  peerCount(): number {
+    return this.conns.size + 1;
+  }
+
+  /** Abre um Peer e resolve no `open`; rejeita se o ID já estiver em uso ou sem rede. */
+  private openPeer(id: string, host: boolean, gen: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const peer = new Peer(id, PEER_OPTS);
+      let settled = false;
+      peer.on('open', (openId: string) => {
+        if (gen !== this.joinGen) {
+          try { peer.destroy(); } catch { /* ignora */ }
+          if (!settled) {
+            settled = true;
+            reject(new Error('stale'));
+          }
+          return;
+        }
+        settled = true;
+        this.peer = peer;
+        this.myId = openId;
+        this.isHost = host;
+        resolve();
+      });
+      peer.on('error', (err) => {
+        const type = String(err && err.type ? err.type : err);
+        if (!settled && (type === 'unavailable-id' || type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed')) {
+          settled = true;
+          try { peer.destroy(); } catch { /* ignora */ }
+          reject(err);
+          return;
+        }
+        // erro depois de conectado: a malha P2P continua de pé
+        console.warn('[net] aviso do PeerJS:', type);
+      });
+      peer.on('connection', (conn) => this.attach(conn));
+      peer.on('disconnected', () => {
+        console.warn('[net] sinal caiu, reconectando...');
+        try { peer.reconnect(); } catch { /* ignora */ }
+      });
+    });
+  }
+
+  async join(code: string, name: string, color: number): Promise<void> {
+    // teardown completo da sala anterior antes de abrir a nova
+    await this.leave();
+    const gen = ++this.joinGen;
+    this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
+    this.myName = name.trim().slice(0, 12) || 'Jimmy';
+    this.myColor = color;
+    this.profiles.clear();
+    this.maxSeen = 1;
+    this.aloneSince = 0;
+
+    const lobby = this.lobbyId();
+    try {
+      // tenta ser o anfitrião reivindicando o ID fixo da sala
+      await this.openPeer(lobby, true, gen);
+      console.log('[net] sala criada (anfitrião):', lobby);
+    } catch {
+      if (gen !== this.joinGen) return;
+      // sala já existe: vira cliente e disca pro anfitrião
+      await this.openPeer(`${APP_PREFIX}-${this.roomCode}-${Math.random().toString(36).slice(2, 10)}`, false, gen);
+      this.connectTo(lobby);
+      console.log('[net] entrou como cliente na sala', this.roomCode);
+    }
+    if (gen !== this.joinGen) return;
+    // reanuncia presença a cada 10s (hello pode se perder)
+    window.clearInterval(this.helloTimer);
+    this.helloTimer = window.setInterval(() => {
+      if (!this.peer) return;
+      this.sendHello();
+      if (this.onPeers) this.onPeers();
+    }, 10000);
+    this.sendHello();
+    if (this.onPeers) this.onPeers();
+  }
+
+  /** Liga os handlers de uma conexão (entrante ou discada por nós). */
+  private attach(conn: DataConnection): void {
+    conn.on('open', () => {
+      this.finalizeConn(conn);
+      this.sendTo(conn, { t: 'hello', p: this.profile() });
+    });
+    conn.on('data', (raw) => {
+      // conexão duplicada já descartada? ignora os dados dela
+      if (this.conns.get(conn.peer) !== conn) return;
+      this.onData(conn.peer, raw as NetMsg);
+    });
+    conn.on('close', () => {
+      if (this.conns.get(conn.peer) === conn) this.dropPeer(conn.peer);
+    });
+    conn.on('error', () => {
+      if (this.conns.get(conn.peer) === conn) this.dropPeer(conn.peer);
+    });
+  }
+
+  private connectTo(id: string): void {
+    const peer = this.peer;
+    if (!peer || !id || id === this.myId || this.conns.has(id) || this.dialing.has(id)) return;
+    this.dialing.add(id);
+    try {
+      const conn = peer.connect(id, { reliable: true });
+      this.outgoing.add(conn);
+      this.attach(conn);
+    } catch (err) {
+      this.dialing.delete(id);
+      console.warn('[net] falha ao discar para', id, err);
+    }
+  }
+
+  /** Desempata conexões duplicadas (discagem simultânea dos dois lados). */
+  private finalizeConn(conn: DataConnection): void {
+    const rid = conn.peer;
+    this.dialing.delete(rid);
+    const existing = this.conns.get(rid);
+    if (existing && existing !== conn) {
+      const iAmSmaller = this.myId < rid;
+      const connIsOutgoing = this.outgoing.has(conn);
+      const keepConn = connIsOutgoing === iAmSmaller;
+      const drop = keepConn ? existing : conn;
+      const keep = keepConn ? conn : existing;
+      try { drop.close(); } catch { /* ignora */ }
+      this.outgoing.delete(drop);
+      this.conns.set(rid, keep);
+      return;
+    }
+    this.conns.set(rid, conn);
+    if (this.onPeers) this.onPeers();
+  }
+
+  private onData(from: string, msg: NetMsg): void {
+    switch (msg.t) {
+      case 'hello': {
+        const prev = this.profiles.get(from);
+        this.profiles.set(from, {
+          name: String(msg.p.name || '?').slice(0, 12),
+          color: Number(msg.p.color) || 0xffffff,
+          skin: typeof msg.p.skin === 'string' ? msg.p.skin : 'comum',
+          score: prev ? prev.score : 0,
+        });
+        this.maxSeen = Math.max(this.maxSeen, this.profiles.size + 1);
+        if (this.isHost) {
+          // manda a lista completa pro recém-chegado e avisa os antigos
+          const c = this.conns.get(from);
+          if (c) this.sendRoster(c);
+          for (const [id, other] of this.conns) {
+            if (id === from) continue;
+            this.sendTo(other, { t: 'peer', id: from });
+          }
+        }
+        if (this.onPeers) this.onPeers();
+        break;
+      }
+      case 'roster': {
+        for (const id of msg.ids) this.connectTo(id);
+        break;
+      }
+      case 'peer': {
+        // alguém novo entrou: disca (o outro lado também; finalizeConn desempata)
+        this.connectTo(msg.id);
+        break;
+      }
+      case 'cow': {
+        if (this.handleCow) this.handleCow(msg.s, from);
+        break;
+      }
+      case 'event': {
+        const pr = this.profiles.get(from);
+        if (this.onEvent) this.onEvent(msg.e, pr ? pr.name : '?');
+        break;
+      }
+    }
+  }
+
+  private sendRoster(conn: DataConnection): void {
+    const ids = new Set<string>(this.conns.keys());
+    ids.add(this.myId);
+    this.sendTo(conn, { t: 'roster', ids: [...ids] });
+  }
+
+  private sendTo(conn: DataConnection, msg: NetMsg): void {
+    try {
+      if (conn.open) void conn.send(msg);
+    } catch { /* conexão fechando */ }
+  }
+
+  private broadcast(msg: NetMsg): void {
+    for (const c of this.conns.values()) this.sendTo(c, msg);
+  }
+
+  private dropPeer(id: string): void {
+    if (!this.conns.delete(id)) return;
+    this.dialing.delete(id);
+    this.profiles.delete(id);
+    if (this.onRemoteLeave) this.onRemoteLeave(id);
+    if (this.onPeers) this.onPeers();
+  }
+
   private sendHello(): void {
-    this.helloAction?.send({ name: this.myName, color: this.myColor, skin: this.mySkin }).catch(() => {});
+    this.broadcast({ t: 'hello', p: this.profile() });
   }
 
   /** Força reanúncio (ex.: ao voltar pra aba no celular). */
   poke(): void {
-    if (!this.room) return;
+    if (!this.peer) return;
     this.sendHello();
     if (this.onPeers) this.onPeers();
   }
@@ -273,70 +525,6 @@ export class NetManager {
     return '⚠️ Conexão caiu? Toque em 🔄 RECONECTAR.';
   }
 
-  get id(): string {
-    return selfId;
-  }
-
-  get connected(): boolean {
-    return this.room !== null;
-  }
-
-  peerCount(): number {
-    if (!this.room) return 1;
-    return Object.keys(this.room.getPeers()).length + 1;
-  }
-
-  async join(code: string, name: string, color: number): Promise<void> {
-    // espera o teardown da sala anterior COMPLETAR antes de abrir a nova:
-    // sair+entrar sobrepostos vazam ofertas mortas e a nova sala nunca conecta
-    await this.leave();
-    this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
-    this.myName = name.trim().slice(0, 12) || 'Jimmy';
-    this.myColor = color;
-    this.profiles.clear();
-    this.maxSeen = 1;
-    this.aloneSince = 0;
-    this.room = joinRoom({ appId: APP_ID }, 'cow-' + this.roomCode);
-
-    const cowAction = this.room.makeAction<CowNetState>('cow');
-    const helloAction = this.room.makeAction<PlayerProfile>('hello');
-    const eventAction = this.room.makeAction<NetEventMsg>('event');
-    this.cowAction = cowAction;
-    this.helloAction = helloAction;
-    this.eventAction = eventAction;
-
-    cowAction.onMessage = (s, ctx) => {
-      if (this.handleCow) this.handleCow(s, ctx.peerId);
-    };
-    helloAction.onMessage = (p, ctx) => {
-      this.profiles.set(ctx.peerId, { name: p.name, color: p.color, skin: typeof p.skin === 'string' ? p.skin : 'comum', score: 0 });
-      this.maxSeen = Math.max(this.maxSeen, this.profiles.size + 1);
-      this.sendHello();
-      if (this.onPeers) this.onPeers();
-    };
-    eventAction.onMessage = (e, ctx) => {
-      const pr = this.profiles.get(ctx.peerId);
-      if (this.onEvent) this.onEvent(e, pr ? pr.name : '?');
-    };
-    this.room.onPeerJoin = () => {
-      this.sendHello();
-      if (this.onPeers) this.onPeers();
-    };
-    this.room.onPeerLeave = (peerId: string) => {
-      this.profiles.delete(peerId);
-      if (this.onRemoteLeave) this.onRemoteLeave(peerId);
-      if (this.onPeers) this.onPeers();
-    };
-    if (this.onPeers) this.onPeers();
-    // reanuncia presença a cada 10s (caso um hello se perca no caminho)
-    window.clearInterval(this.helloTimer);
-    this.sendHello();
-    this.helloTimer = window.setInterval(() => {
-      if (this.room) this.sendHello();
-      if (this.onPeers) this.onPeers();
-    }, 10000);
-  }
-
   private handleCow: ((s: CowNetState, peerId: string) => void) | null = null;
 
   onCowState(cb: (s: CowNetState, peerId: string) => void): void {
@@ -344,16 +532,16 @@ export class NetManager {
   }
 
   sendState(s: CowNetState): void {
-    if (this.cowAction) this.cowAction.send(s).catch(() => {});
+    this.broadcast({ t: 'cow', s });
   }
 
   sendBoom(text: string, x: number, y: number, z: number): void {
-    if (this.eventAction) this.eventAction.send({ type: 'boom', text, x, y, z, target: '' }).catch(() => {});
+    this.broadcast({ t: 'event', e: { type: 'boom', text, x, y, z, target: '' } });
   }
 
   /** Cabeçada PvP: avisa a vítima onde foi o golpe (só ela aplica). */
   sendHit(targetPeerId: string, x: number, z: number): void {
-    if (this.eventAction) this.eventAction.send({ type: 'hit', text: '', x, y: 0, z, target: targetPeerId }).catch(() => {});
+    this.broadcast({ t: 'event', e: { type: 'hit', text: '', x, y: 0, z, target: targetPeerId } });
   }
 
   updateScore(peerId: string, score: number): void {
@@ -368,29 +556,19 @@ export class NetManager {
     return this.profiles.get(peerId) ?? null;
   }
 
-  /** Diagnóstico de conexão pro lobby: trackers abertos, pares P2P e hellos. */
+  /** Diagnóstico do lobby: sinal PeerJS + conexões P2P + perfis conhecidos. */
   debugStatus(): { trackersOpen: number; trackersTotal: number; peers: number; known: number } {
-    let open = 0;
-    let total = 0;
-    try {
-      const sockets = getRelaySockets() as Record<string, { readyState?: number }>;
-      for (const key of Object.keys(sockets)) {
-        total++;
-        if (sockets[key]?.readyState === 1) open++;
-      }
-    } catch {
-      /* ignora */
-    }
+    const signaling = this.peer && !this.peer.destroyed && !this.peer.disconnected ? 1 : 0;
     return {
-      trackersOpen: open,
-      trackersTotal: total,
-      peers: this.room ? Object.keys(this.room.getPeers()).length : 0,
+      trackersOpen: signaling,
+      trackersTotal: 1,
+      peers: this.conns.size,
       known: this.profiles.size + 1,
     };
   }
 
   scoreboard(myScore: number): ScoreEntry[] {
-    const list: ScoreEntry[] = [{ id: selfId, name: this.myName, color: this.myColor, score: myScore, me: true }];
+    const list: ScoreEntry[] = [{ id: this.myId, name: this.myName, color: this.myColor, score: myScore, me: true }];
     for (const [id, p] of this.profiles) {
       list.push({ id, name: p.name, color: p.color, score: p.score, me: false });
     }
@@ -399,22 +577,23 @@ export class NetManager {
   }
 
   async leave(): Promise<void> {
+    this.joinGen++;
     window.clearInterval(this.helloTimer);
     this.helloTimer = 0;
     this.profiles.clear();
     this.maxSeen = 1;
     this.aloneSince = 0;
-    if (this.room) {
-      const r = this.room;
-      this.room = null;
-      this.cowAction = null;
-      this.helloAction = null;
-      this.eventAction = null;
-      try {
-        await r.leave();
-      } catch {
-        /* ignora */
-      }
+    for (const c of this.conns.values()) {
+      try { c.close(); } catch { /* ignora */ }
+    }
+    this.conns.clear();
+    this.dialing.clear();
+    const p = this.peer;
+    this.peer = null;
+    this.isHost = false;
+    this.myId = '';
+    if (p && !p.destroyed) {
+      try { p.destroy(); } catch { /* ignora */ }
     }
     if (this.onPeers) this.onPeers();
   }

@@ -136,7 +136,7 @@ constructor() {}
       /* sem reflexos */
     }
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     document.body.appendChild(this.renderer.domElement);
     this.initParticles();
 
@@ -192,8 +192,8 @@ constructor() {}
     } catch { /* ignora */ }
     if (this.sunLight) this.sunLight.castShadow = !low;
     this.renderer.shadowMap.enabled = !low;
-    // BAIXA: sem sombras; ALTA: PCF suave (mais caro, porém limitado ao frustum de 90m).
-    this.renderer.shadowMap.type = low ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
+    // BAIXA: sem sombras; ALTA: PCF (o PCFSoftShadowMap foi removido no three r186).
+    this.renderer.shadowMap.type = low ? THREE.BasicShadowMap : THREE.PCFShadowMap;
     // recompila os shaders já criados (mundo pode já existir)
     const mats = new Set<THREE.Material>();
     this.scene.traverse((o) => {
@@ -822,7 +822,7 @@ constructor() {}
     const others = list.filter((p) => !p.me);
     const dbg = this.net.debugStatus();
     let html = `<div>Sala: <b>${this.net.roomCode}</b> 🌐${list.length}</div>`;
-    html += `<div style="font-size:13px;color:#999">📡 trackers ${dbg.trackersOpen}/${dbg.trackersTotal} · P2P ${dbg.peers} · vistos ${dbg.known}</div>`;
+    html += `<div style="font-size:13px;color:#999">📡 sinal ${dbg.trackersOpen}/${dbg.trackersTotal} · P2P ${dbg.peers} · vistos ${dbg.known}</div>`;
     html += list.map((p) =>
       `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
     ).join('');

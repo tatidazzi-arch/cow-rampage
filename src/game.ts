@@ -50,7 +50,27 @@ export class Game {
   private wallRunTimer = 0;
   private wallRunDir = new THREE.Vector3();
   private wallRunNormal = new THREE.Vector3();
-  private particles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
+  // --- Pool de partículas: 1 único InstancedMesh (antes: 1 Mesh+BoxGeometry por
+  // faísca, criada a cada frame pelo jetpack e nunca liberada -> GC + vazamento GPU).
+  private particleIM: THREE.InstancedMesh | null = null;
+  private readonly pData: { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number }[] = [];
+  private readonly P_MAX = 600;
+  private pCursor = 0;
+  private readonly _pMat = new THREE.Matrix4();
+  private readonly _pCol = new THREE.Color();
+  // --- Scratch reutilizável: zero alocação de Vector3/Ray por frame ---
+  private readonly _fwd = new THREE.Vector3();
+  private readonly _rgt = new THREE.Vector3();
+  private readonly _move = new THREE.Vector3();
+  private readonly _wrRight = new THREE.Vector3();
+  private readonly _wrDir = new THREE.Vector3();
+  private readonly _camFwd = new THREE.Vector3();
+  private readonly _carryOff = new THREE.Vector3();
+  private readonly _carryTgt = new THREE.Vector3();
+  private readonly _camPos = new THREE.Vector3();
+  private readonly _push = new THREE.Vector3();
+  private downRay: RAPIER.Ray | null = null;
+  private hudAcc = 0;
   private missions = new MissionManager();
   private sweaterHintAt = 0;
   private wasSwimming = false;
@@ -116,8 +136,9 @@ constructor() {}
       /* sem reflexos */
     }
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(this.renderer.domElement);
+    this.initParticles();
 
     this.scene.add(new THREE.AmbientLight(0x606080, 0.6));
     const dl = new THREE.DirectionalLight(0xfff5e0, 1.2);
@@ -125,11 +146,20 @@ constructor() {}
     dl.castShadow = true;
     dl.shadow.mapSize.width = 1024;
     dl.shadow.mapSize.height = 1024;
-    dl.shadow.camera.left = -250;
-    dl.shadow.camera.right = 250;
-    dl.shadow.camera.top = 250;
-    dl.shadow.camera.bottom = -250;
+    // Frustum JUSTO em volta do jogador (antes: ±250m fixo no centro do mapa ->
+    // o shadow map inteiro era gasto longe e a sombra nem cobria o spawn). O sol
+    // segue a vaca em updateSun(), então só o que está a <90m entra no passe de sombra.
+    dl.shadow.camera.left = -90;
+    dl.shadow.camera.right = 90;
+    dl.shadow.camera.top = 90;
+    dl.shadow.camera.bottom = -90;
+    dl.shadow.camera.near = 1;
+    dl.shadow.camera.far = 400;
+    dl.shadow.bias = -0.0005;
+    dl.shadow.normalBias = 0.02;
+    dl.shadow.camera.updateProjectionMatrix();
     this.scene.add(dl);
+    this.scene.add(dl.target);
     this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4));
     this.sunLight = dl;
     this.applyQuality();
@@ -162,6 +192,8 @@ constructor() {}
     } catch { /* ignora */ }
     if (this.sunLight) this.sunLight.castShadow = !low;
     this.renderer.shadowMap.enabled = !low;
+    // BAIXA: sem sombras; ALTA: PCF suave (mais caro, porém limitado ao frustum de 90m).
+    this.renderer.shadowMap.type = low ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
     // recompila os shaders já criados (mundo pode já existir)
     const mats = new Set<THREE.Material>();
     this.scene.traverse((o) => {
@@ -864,7 +896,7 @@ constructor() {}
             dx = Math.cos(a);
             dz = Math.sin(a);
           }
-          const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(120);
+          const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(120);
           this.cow.body.applyImpulse({ x: push.x, y: 80, z: push.z }, true);
           this.showMessage(fromName + ' te deu CABECADA!');
           this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
@@ -963,18 +995,47 @@ constructor() {}
     }
   }
 
-  private spawnParticles(x: number, y: number, z: number, n: number, color = 0xffcc32) {
-    const mat = new THREE.MeshBasicMaterial({ color });
-    for (let i = 0; i < n; i++) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), mat);
-      m.position.set(x, y, z);
-      this.scene.add(m);
-      this.particles.push({
-        mesh: m,
-        vel: new THREE.Vector3((Math.random() - 0.5) * 0.3, Math.random() * 0.2 + 0.1, (Math.random() - 0.5) * 0.3),
-        life: 30 + Math.random() * 30,
-      });
+  /** Cria o pool de faíscas: TODAS num único InstancedMesh (1 draw call, 1 geometria). */
+  private initParticles() {
+    const im = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.12, 0.12, 0.12),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }),
+      this.P_MAX,
+    );
+    im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    im.frustumCulled = false;
+    im.castShadow = false;
+    im.receiveShadow = false;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    this._pCol.setHex(0xffffff);
+    for (let i = 0; i < this.P_MAX; i++) {
+      im.setMatrixAt(i, zero);
+      im.setColorAt(i, this._pCol);
+      this.pData.push({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0 });
     }
+    im.instanceMatrix.needsUpdate = true;
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    this.particleIM = im;
+    this.scene.add(im);
+  }
+
+  /** Emite faíscas reciclando slots do pool (nenhuma geometria/mesh é criada). */
+  private spawnParticles(x: number, y: number, z: number, n: number, color = 0xffcc32) {
+    const im = this.particleIM;
+    if (!im) return;
+    this._pCol.setHex(color);
+    for (let i = 0; i < n; i++) {
+      const idx = this.pCursor;
+      this.pCursor = (this.pCursor + 1) % this.P_MAX;
+      const d = this.pData[idx]!;
+      d.x = x; d.y = y; d.z = z;
+      d.vx = (Math.random() - 0.5) * 0.3;
+      d.vy = Math.random() * 0.2 + 0.1;
+      d.vz = (Math.random() - 0.5) * 0.3;
+      d.life = 30 + Math.random() * 30;
+      im.setColorAt(idx, this._pCol);
+    }
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
   }
 
   private randomMsg(): string {
@@ -1169,7 +1230,7 @@ constructor() {}
       if (d < 5) {
         this.setNPCState(n, 'stunned');
         n.stateTimer = 5;
-        const push = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(170);
+        const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(170);
         n.body.applyImpulse({ x: push.x, y: 120, z: push.z }, true);
         this.score += 3;
         this.chaos = Math.min(100, this.chaos + 5);
@@ -1203,9 +1264,9 @@ constructor() {}
     const running = this.input.isDown('ShiftLeft', 'ShiftRight');
     const speed = running ? 11 : 6;
 
-    const fwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
-    const rgt = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-    const move = new THREE.Vector3();
+    const fwd = this._fwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+    const rgt = this._rgt.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
+    const move = this._move.set(0, 0, 0);
     if (this.input.isDown('KeyW', 'ArrowUp')) move.add(fwd);
     if (this.input.isDown('KeyS', 'ArrowDown')) move.sub(fwd);
     if (this.input.isDown('KeyA', 'ArrowLeft')) move.add(rgt);
@@ -1279,7 +1340,10 @@ constructor() {}
       }
 
       // detecta chao via raycast (exclui o proprio corpo da vaca!)
-      const ray = new RAPIER.Ray(t, { x: 0, y: -1, z: 0 });
+      const ray = this.downRay ?? (this.downRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }));
+      ray.origin.x = t.x;
+      ray.origin.y = t.y;
+      ray.origin.z = t.z;
       const hit = this.physics.castRay(ray, 1.1 * COW_SCALE + 0.4, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, this.cow.body);
       const wasGrounded = this.cow.grounded;
       this.cow.grounded = hit !== null && !inWater;
@@ -1295,12 +1359,13 @@ constructor() {}
       } else {
         this.wallRunNormal.set(near.nx, 0, near.nz);
         // direcao ao longo da parede segue a camera (mouse dirige)
-        const right = new THREE.Vector3(-near.nz, 0, near.nx);
-        const camFwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+        const right = this._wrRight.set(-near.nz, 0, near.nx);
+        const camFwd = this._camFwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
         if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
         this.wallRunDir.copy(right);
         const back = this.input.isDown('KeyS', 'ArrowDown');
-        const wrDir = back ? this.wallRunDir.clone().multiplyScalar(-1) : this.wallRunDir.clone();
+        const wrDir = this._wrDir.copy(this.wallRunDir);
+        if (back) wrDir.multiplyScalar(-1);
         const spd = running ? 13 : 9;
         body.setLinvel({
           x: wrDir.x * spd - this.wallRunNormal.x * 2,
@@ -1366,8 +1431,8 @@ constructor() {}
     this.wallRunTimer = 2.0;
     this.wallRunNormal.set(near.nx, 0, near.nz);
     // direcao ao longo da parede: perpendicular a normal, seguindo a camera
-    const right = new THREE.Vector3(-near.nz, 0, near.nx);
-    const camFwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+    const right = this._wrRight.set(-near.nz, 0, near.nx);
+    const camFwd = this._camFwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
     if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
     this.wallRunDir.copy(right);
     this.missions.event('wallrun');
@@ -1380,12 +1445,8 @@ constructor() {}
     if (!this.carrying) return;
     const t = this.cow.body.translation();
     const yaw = this.cow.yaw;
-    const offset = new THREE.Vector3(
-      -Math.sin(yaw) * 0.3,
-      0,
-      -Math.cos(yaw) * 0.3,
-    );
-    const target = new THREE.Vector3(t.x + offset.x, t.y + 1.55 * COW_SCALE, t.z + offset.z);
+    const offset = this._carryOff.set(-Math.sin(yaw) * 0.3, 0, -Math.cos(yaw) * 0.3);
+    const target = this._carryTgt.set(t.x + offset.x, t.y + 1.55 * COW_SCALE, t.z + offset.z);
     const body = this.carrying.body;
     const cur = body.translation();
     body.setTranslation({
@@ -1465,7 +1526,11 @@ constructor() {}
         }
         case 'launched': {
           // exclui o proprio corpo: senao "pousa" no ar na hora do disparo
-          const fall = this.physics.castRay(new RAPIER.Ray(t, { x: 0, y: -1, z: 0 }), 1.2, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, n.body);
+          const lray = this.downRay ?? (this.downRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }));
+          lray.origin.x = t.x;
+          lray.origin.y = t.y;
+          lray.origin.z = t.z;
+          const fall = this.physics.castRay(lray, 1.2, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, n.body);
           if (fall !== null) {
             this.setNPCState(n, 'stunned');
             n.stateTimer = 6;
@@ -1553,16 +1618,23 @@ constructor() {}
   }
 
   private updateParticles() {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.mesh.position.add(p.vel);
-      p.vel.y -= 0.005;
-      p.life--;
-      if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        this.particles.splice(i, 1);
-      }
+    const im = this.particleIM;
+    if (!im) return;
+    const m = this._pMat;
+    for (let i = 0; i < this.P_MAX; i++) {
+      const d = this.pData[i]!;
+      if (d.life <= 0) continue; // slot morto já ficou com escala 0
+      d.life--;
+      d.x += d.vx;
+      d.y += d.vy;
+      d.z += d.vz;
+      d.vy -= 0.005;
+      const s = d.life > 0 ? 1 : 0; // no frame da morte, some
+      m.makeScale(s, s, s);
+      m.setPosition(d.x, d.y, d.z);
+      im.setMatrixAt(i, m);
     }
+    im.instanceMatrix.needsUpdate = true;
   }
 
   private updateCamera() {
@@ -1580,7 +1652,11 @@ constructor() {}
         fog.far = Math.max(2500, this.camDist * 2.2);
       }
     }
-    const wantFar = inCity ? 1500 : Math.max(6000, this.camDist * 2.5 + 2000);
+    // far amarrado à neblina: além dela tudo já é cor de neblina, então não há
+    // por que submeter geometria. Antes era 6000 fixo -> puxava a ilha inteira
+    // (grama + árvores instanciadas) mesmo com o jogador parado (~12M triângulos).
+    const fogFar = inCity ? 1200 : Math.max(2500, this.camDist * 2.2);
+    const wantFar = inCity ? 1500 : Math.max(fogFar + 400, this.camDist * 2.5 + 400);
     if (Math.abs(this.camera.far - wantFar) > 1) {
       this.camera.far = wantFar;
       this.camera.updateProjectionMatrix();
@@ -1588,7 +1664,8 @@ constructor() {}
     const targetX = t.x - Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const targetY = t.y + 3 + Math.sin(this.camPitch) * this.camDist;
     const targetZ = t.z - Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);
-    this.camera.position.lerp(new THREE.Vector3(targetX, targetY, targetZ), 0.12);
+    this._camPos.set(targetX, targetY, targetZ);
+    this.camera.position.lerp(this._camPos, 0.12);
     this.camera.lookAt(t.x, t.y + 2.5, t.z);
   }
 
@@ -1685,7 +1762,24 @@ constructor() {}
     }
     this.updateParticles();
     this.updateCamera();
-    this.updateHUD();
+    this.updateSun();
+    // HUD a 10Hz: o innerHTML das missões/placar e as varreduras de NPC por
+    // frame custavam caro à toa (nada visível muda em <100ms).
+    this.hudAcc += dt;
+    if (this.hudAcc >= 0.1) {
+      this.hudAcc = 0;
+      this.updateHUD();
+    }
+  }
+
+  /** O sol (e sua câmera de sombra de 90m) acompanha a vaca todo frame. */
+  private updateSun() {
+    const dl = this.sunLight;
+    if (!dl) return;
+    const t = this.cow.group.position;
+    dl.position.set(t.x + 50, t.y + 80, t.z + 30);
+    dl.target.position.set(t.x, t.y, t.z);
+    dl.target.updateMatrixWorld();
   }
 
   /** Vitrine no menu: câmera orbitando a fazenda + vaca pastando. */

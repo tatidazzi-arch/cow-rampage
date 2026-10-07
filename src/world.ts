@@ -4,6 +4,7 @@ import { worldRand } from './rng';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export interface Tree {
   id: number;
@@ -200,7 +201,8 @@ export class World {
     water.position.y = -0.6;
     this.scene.add(water);
 
-    this.buildTerrainMesh();
+    // UMA única malha de terreno (antes era construída 2x: dois meshes de ~294k
+    // triângulos sobrepostos -> 1 draw call e ~294k tris desperdiçados).
     this.buildRoads();
     this.buildBoundaryWalls();
     this.buildCliffs();
@@ -427,8 +429,11 @@ private buildRoads() {
     }
   }
 
-  /** Boias marcando o limite da agua. */
+  /** Boias marcando o limite da agua.
+   *  Antes: 224 meshes, cada um com sua própria SphereGeometry+material (224
+   *  draw calls). Agora: 1 InstancedMesh com cor por instância (1 draw call). */
   private buildBuoys() {
+    const spots: { x: number; z: number; red: boolean }[] = [];
     const N = 160;
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
@@ -436,15 +441,7 @@ private buildRoads() {
       const bx = Math.cos(th) * r;
       const bz = Math.sin(th) * r;
       if (Math.abs(bx) < 6 && bz < -1000) continue; // nao entra na ponte
-      const color = i % 2 === 0 ? 0xff3333 : 0xffffff;
-      const b = new THREE.Mesh(
-        new THREE.SphereGeometry(0.5, 8, 6),
-        new THREE.MeshLambertMaterial({ color }),
-      );
-      b.position.set(bx, -0.1, bz);
-      this.scene.add(b);
-      this.buoyCount++;
-      this.buoyPos.push({ x: bx, z: bz });
+      spots.push({ x: bx, z: bz, red: i % 2 === 0 });
     }
     // anel na ilha redonda (pula a chegada da ponte)
     const NB = 64;
@@ -453,16 +450,27 @@ private buildRoads() {
       const bx = BALL.x + Math.cos(th) * (BALL.r + 1.5);
       const bz = BALL.z + Math.sin(th) * (BALL.r + 1.5);
       if (Math.abs(bx) < 6 && bz > -1600) continue;
-      const color = i % 2 === 0 ? 0xff3333 : 0xffffff;
-      const b = new THREE.Mesh(
-        new THREE.SphereGeometry(0.5, 8, 6),
-        new THREE.MeshLambertMaterial({ color }),
-      );
-      b.position.set(bx, -0.1, bz);
-      this.scene.add(b);
-      this.buoyCount++;
-      this.buoyPos.push({ x: bx, z: bz });
+      spots.push({ x: bx, z: bz, red: i % 2 === 0 });
     }
+    if (spots.length === 0) return;
+    const im = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.5, 8, 6),
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      spots.length,
+    );
+    const m4 = new THREE.Matrix4();
+    const col = new THREE.Color();
+    spots.forEach((p, i) => {
+      m4.makeTranslation(p.x, -0.1, p.z);
+      im.setMatrixAt(i, m4);
+      im.setColorAt(i, col.setHex(p.red ? 0xff3333 : 0xffffff));
+    });
+    im.instanceMatrix.needsUpdate = true;
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.computeBoundingSphere();
+    this.scene.add(im);
+    this.buoyCount = spots.length;
+    this.buoyPos = spots.map((p) => ({ x: p.x, z: p.z }));
   }
 
   /** Templates dos 8 prédios OBJ (medidos uma vez, clonados). */
@@ -1412,25 +1420,19 @@ const towerBox = new THREE.Box3();
       this.grassInfo.spawnCount = cells.get('spawn')?.length ?? 0;
       const dummy = new THREE.Object3D();
       const col = new THREE.Color();
+      // Funde as fontes de grama numa geometria só (cor por vértice): 1
+      // InstancedMesh por célula em vez de 1 por fonte (corta os draw calls).
+      const mergedGeo = this.mergeGrassSources(sources);
+      const mergedMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
       let total = 0;
       for (const spots of cells.values()) {
-        for (const src of sources) {
-          const im = new THREE.InstancedMesh(src.geo, src.mat, Math.max(spots.length, 1));
-          im.count = spots.length;
-          spots.forEach((p, i) => {
-            dummy.position.set(p.x, this.groundHeight(p.x, p.z) + 0.05, p.z);
-            dummy.rotation.set(0, p.rot, 0);
-            dummy.scale.set(p.sxz, p.sy, p.sxz);
-            dummy.updateMatrix();
-            im.setMatrixAt(i, dummy.matrix);
-            im.setColorAt(i, col.setHSL(0.25 + worldRand() * 0.08, 0.35 + worldRand() * 0.25, 0.72 + worldRand() * 0.26));
-          });
-          im.instanceMatrix.needsUpdate = true;
-          if (im.instanceColor) im.instanceColor.needsUpdate = true;
-          im.castShadow = false;
-          im.receiveShadow = true;
-          im.computeBoundingSphere();
-          this.scene.add(im);
+        if (mergedGeo) {
+          this.addGrassCluster(new THREE.InstancedMesh(mergedGeo, mergedMat, spots.length), spots, dummy, col);
+        } else {
+          // fallback (fusão falhou): 1 InstancedMesh por fonte, como antes
+          for (const src of sources) {
+            this.addGrassCluster(new THREE.InstancedMesh(src.geo, src.mat, spots.length), spots, dummy, col);
+          }
         }
         total += spots.length;
       }
@@ -1450,6 +1452,64 @@ const towerBox = new THREE.Box3();
       console.log(`[grass] plantados=${total}`);
     } catch (err) {
       console.warn('Grama nao carregou:', err);
+    }
+  }
+
+  /** Preenche um InstancedMesh de grama (matrizes + cor por instância) e o adiciona. */
+  private addGrassCluster(
+    im: THREE.InstancedMesh,
+    spots: { x: number; z: number; sxz: number; sy: number; rot: number }[],
+    dummy: THREE.Object3D,
+    col: THREE.Color,
+  ): void {
+    im.count = spots.length;
+    spots.forEach((p, i) => {
+      dummy.position.set(p.x, this.groundHeight(p.x, p.z) + 0.05, p.z);
+      dummy.rotation.set(0, p.rot, 0);
+      dummy.scale.set(p.sxz, p.sy, p.sxz);
+      dummy.updateMatrix();
+      im.setMatrixAt(i, dummy.matrix);
+      im.setColorAt(i, col.setHSL(0.25 + worldRand() * 0.08, 0.35 + worldRand() * 0.25, 0.72 + worldRand() * 0.26));
+    });
+    im.instanceMatrix.needsUpdate = true;
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.castShadow = false;
+    im.receiveShadow = true;
+    im.computeBoundingSphere();
+    this.scene.add(im);
+  }
+
+  /** Funde as fontes de grama em 1 geometria (posição+normal+cor por vértice).
+   *  Retorna null se os atributos não forem compatíveis (cai no modo por-fonte). */
+  private mergeGrassSources(
+    sources: { geo: THREE.BufferGeometry; mat: THREE.Material | THREE.Material[] }[],
+  ): THREE.BufferGeometry | null {
+    if (sources.length <= 1) return null; // já é 1 draw por célula
+    try {
+      const baked: THREE.BufferGeometry[] = [];
+      for (const src of sources) {
+        const mat = Array.isArray(src.mat) ? src.mat[0] : src.mat;
+        const color = (mat as THREE.MeshLambertMaterial).color ?? new THREE.Color(0x55aa33);
+        // não-indexado + só {position, normal, color}: garante merge compatível
+        const g = src.geo.index ? src.geo.toNonIndexed() : src.geo.clone();
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        const pos = g.getAttribute('position') as THREE.BufferAttribute;
+        const carr = new Float32Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) {
+          carr[i * 3] = color.r;
+          carr[i * 3 + 1] = color.g;
+          carr[i * 3 + 2] = color.b;
+        }
+        g.setAttribute('color', new THREE.BufferAttribute(carr, 3));
+        for (const name of Object.keys(g.attributes)) {
+          if (name !== 'position' && name !== 'normal' && name !== 'color') g.deleteAttribute(name);
+        }
+        baked.push(g);
+      }
+      return mergeGeometries(baked, false);
+    } catch (err) {
+      console.warn('Fusão da grama falhou, mantendo por-fonte:', err);
+      return null;
     }
   }
 

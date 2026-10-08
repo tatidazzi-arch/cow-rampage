@@ -317,16 +317,19 @@ private buildRoads() {
     const lineMat = new THREE.MeshLambertMaterial({ color: 0xffff88 });
     const walkMat = new THREE.MeshLambertMaterial({ color: 0xb8b8b8 });
     // N-S (x=0): z -1080..1150 (chega na ponte) ; E-W (z=0): x -1400..1150
-    const r1 = new THREE.Mesh(new THREE.BoxGeometry(6, 0.1, 2230), roadMat);
+    // avenidas LARGAS: pista de 12m + calcada de 3m de cada lado
+    const ROAD_W = 12;
+    const WALK_X = 7.5;
+    const r1 = new THREE.Mesh(new THREE.BoxGeometry(ROAD_W, 0.1, 2230), roadMat);
     r1.position.set(0, 0.1, 35);
     r1.receiveShadow = true;
     this.scene.add(r1);
-    const r2 = new THREE.Mesh(new THREE.BoxGeometry(2550, 0.1, 6), roadMat);
+    const r2 = new THREE.Mesh(new THREE.BoxGeometry(2550, 0.1, ROAD_W), roadMat);
     r2.position.set(-125, 0.1, 0);
     r2.receiveShadow = true;
     this.scene.add(r2);
     // calçadas das avenidas
-    for (const s of [-4.5, 4.5]) {
+    for (const s of [-WALK_X, WALK_X]) {
       const s1 = new THREE.Mesh(new THREE.BoxGeometry(3, 0.12, 2230), walkMat);
       s1.position.set(s, 0.12, 35);
       s1.receiveShadow = true;
@@ -336,18 +339,22 @@ private buildRoads() {
       s2.receiveShadow = true;
       this.scene.add(s2);
     }
-    // faixas: 1 InstancedMesh (~800 faixas em 1 draw call; E-W usa a mesma geo girada)
+    // faixas: centro + 2 faixas de pista (1 InstancedMesh = 1 draw call)
     {
       const mats: THREE.Matrix4[] = [];
       const m4 = new THREE.Matrix4();
-      for (let i = -1080; i <= 1150; i += 6) {
-        m4.makeTranslation(0, 0.16, i);
-        mats.push(m4.clone());
+      for (const off of [-3, 0, 3]) {
+        for (let i = -1080; i <= 1150; i += 6) {
+          m4.makeTranslation(off, 0.16, i);
+          mats.push(m4.clone());
+        }
       }
-      for (let i = -1400; i <= 1150; i += 6) {
-        m4.makeRotationY(Math.PI / 2);
-        m4.setPosition(i, 0.16, 0);
-        mats.push(m4.clone());
+      for (const off of [-3, 0, 3]) {
+        for (let i = -1400; i <= 1150; i += 6) {
+          m4.makeRotationY(Math.PI / 2);
+          m4.setPosition(i, 0.16, off);
+          mats.push(m4.clone());
+        }
       }
       const lines = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 0.12, 2), lineMat, mats.length);
       mats.forEach((mm, idx) => lines.setMatrixAt(idx, mm));
@@ -603,8 +610,8 @@ const towerBox = new THREE.Box3();
     let halfD = tpl.halfD * s;
     const rotIdx = Math.floor(worldRand() * 4);
     if (rotIdx % 2 === 1) { const t = halfW; halfW = halfD; halfD = t; }
-    if (Math.abs(bx) < halfW + 5 && bz > -1085 && bz < 1155) return false;
-    if (Math.abs(bz) < halfD + 5 && bx > -1405 && bx < 1155) return false;
+    if (Math.abs(bx) < halfW + 9 && bz > -1085 && bz < 1155) return false;
+    if (Math.abs(bz) < halfD + 9 && bx > -1405 && bx < 1155) return false;
     if (Math.abs(bx) < 450 && Math.abs(bz - CITY.z) < 450) {
       const rx = Math.abs(bx - Math.round(bx / 100) * 100);
       const rz = Math.abs((bz - CITY.z) - Math.round((bz - CITY.z) / 100) * 100);
@@ -652,8 +659,8 @@ const towerBox = new THREE.Box3();
     }
     const bw = 4 + worldRand() * 8;
     const bd = 4 + worldRand() * 8;
-    if (Math.abs(bx) < bw / 2 + 5 && bz > -1085 && bz < 1155) return false;
-    if (Math.abs(bz) < bd / 2 + 5 && bx > -1405 && bx < 1155) return false;
+    if (Math.abs(bx) < bw / 2 + 9 && bz > -1085 && bz < 1155) return false;
+    if (Math.abs(bz) < bd / 2 + 9 && bx > -1405 && bx < 1155) return false;
     // ruas menores da cidade (grade de 100m)
     if (Math.abs(bx) < 450 && Math.abs(bz - CITY.z) < 450) {
       const rx = Math.abs(bx - Math.round(bx / 400) * 400);
@@ -757,9 +764,9 @@ const towerBox = new THREE.Box3();
       const tx = (worldRand() - 0.5) * WORLD_SIZE * 1.9;
       const tz = (worldRand() - 0.5) * WORLD_SIZE * 1.9;
 
-      // longe de estradas e do centro
-      const onNSRoad = Math.abs(tx) < 3.5 && tz > -1085 && tz < 1155;
-      const onEWRoad = Math.abs(tz) < 3.5 && tx > -1405 && tx < 1155;
+      // longe de estradas (agora com 12m + calcadas) e do centro
+      const onNSRoad = Math.abs(tx) < 9.5 && tz > -1085 && tz < 1155;
+      const onEWRoad = Math.abs(tz) < 9.5 && tx > -1405 && tx < 1155;
       if (onNSRoad || onEWRoad) continue;
       if (Math.abs(tx) < 6 && Math.abs(tz) < 6) continue;
       if (!this.isOnIsland(tx, tz, 3)) continue;
@@ -1254,7 +1261,8 @@ const towerBox = new THREE.Box3();
     this.logProp('campfire', cx, cz);
   }
 
-  /** Carros fantasma nas avenidas (sem colisão, só visual). */
+  /** Carros fantasma nas avenidas (sem colisão, só visual). Caixas de fallback
+   *  até o R8 (r8.fbx) carregar; aí cada carro vira 1 mesh fundido do modelo. */
   private buildTraffic() {
     const carColors = [0xef4444, 0x3b82f6, 0xf59e0b, 0x10b981, 0xffffff];
     const mkCar = (color: number): THREE.Group => {
@@ -1270,21 +1278,90 @@ const towerBox = new THREE.Box3();
       car.add(cabin);
       return car;
     };
+    // pistas da avenida larga: faixas em ±3
     for (let i = 0; i < 5; i++) {
       const car = mkCar(carColors[i % carColors.length]);
-      car.position.set(i % 2 === 0 ? -1.5 : 1.5, 0.1, -1000 + i * 420);
+      car.position.set(i % 2 === 0 ? -3 : 3, 0.1, -1000 + i * 420);
       if (i % 2 === 1) car.rotation.y = Math.PI;
       this.scene.add(car);
       this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1060, max: 1130 });
     }
     for (let i = 0; i < 5; i++) {
       const car = mkCar(carColors[(i + 2) % carColors.length]);
-      car.rotation.y = Math.PI / 2;
-      car.position.set(-1300 + i * 520, 0.1, i % 2 === 0 ? -1.5 : 1.5);
+      // ímpar vai em -X: gira -90° pra não dirigir de ré
+      car.rotation.y = i % 2 === 0 ? Math.PI / 2 : -Math.PI / 2;
+      car.position.set(-1300 + i * 520, 0.1, i % 2 === 0 ? -3 : 3);
       this.scene.add(car);
       this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1380, max: 1130 });
     }
     this.logProp('traffic', 0, 0);
+    void this.loadCarModel();
+  }
+
+  /** Carrega o R8, funde as 168 partes em 1 geometria (cor por vértice) e troca
+   *  os carros de caixa. Frente do modelo = +Z (igual às caixas). */
+  private async loadCarModel(): Promise<void> {
+    try {
+      const model = await new FBXLoader().loadAsync('models/car/r8.fbx');
+      model.updateMatrixWorld(true);
+      const geos: THREE.BufferGeometry[] = [];
+      const dc = new THREE.Color(0x888888);
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+        const mc = mat && (mat as THREE.MeshPhongMaterial).color
+          ? (mat as THREE.MeshPhongMaterial).color
+          : dc;
+        const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        if (!g.index) {
+          const n = g.getAttribute('position').count;
+          const idx = new Uint32Array(n);
+          for (let i = 0; i < n; i++) idx[i] = i;
+          g.setIndex(new THREE.BufferAttribute(idx, 1));
+        }
+        const pos = g.getAttribute('position') as THREE.BufferAttribute;
+        const carr = new Float32Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) {
+          carr[i * 3] = mc.r;
+          carr[i * 3 + 1] = mc.g;
+          carr[i * 3 + 2] = mc.b;
+        }
+        g.setAttribute('color', new THREE.BufferAttribute(carr, 3));
+        for (const name of Object.keys(g.attributes)) {
+          if (name !== 'position' && name !== 'normal' && name !== 'color') g.deleteAttribute(name);
+        }
+        geos.push(g);
+      });
+      const merged = mergeGeometries(geos, false);
+      if (!merged) {
+        console.warn('[car] fusão do R8 falhou, mantendo caixas');
+        return;
+      }
+      // normaliza: 4.4m de comprimento no eixo Z, centrado, fundo em y=0
+      merged.computeBoundingBox();
+      const bb = merged.boundingBox!;
+      const size = bb.getSize(new THREE.Vector3());
+      const s = size.z > 0 ? 4.4 / size.z : 1;
+      merged.scale(s, s, s);
+      merged.computeBoundingBox();
+      const b2 = merged.boundingBox!;
+      merged.translate(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -(b2.min.z + b2.max.z) / 2);
+      merged.computeVertexNormals();
+      const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({
+        vertexColors: true, metalness: 0.45, roughness: 0.32, envMapIntensity: 0.9,
+      }));
+      mesh.castShadow = false; // fantasma: não entra no shadow map (são 217k verts)
+      for (const c of this.cars) {
+        for (const child of [...c.mesh.children]) c.mesh.remove(child);
+        c.mesh.add(mesh.clone());
+        c.mesh.position.y = 0.05;
+      }
+      console.log(`[car] R8 carregado: ${merged.getAttribute('position').count} verts`);
+    } catch (err) {
+      console.warn('Modelo do carro nao carregou, mantendo caixas:', err);
+    }
   }
 
   /** Dizima geometria mantendo 1 a cada `factor` triângulos (grupos preservados). */
@@ -1389,8 +1466,8 @@ const towerBox = new THREE.Box3();
             const x = gx + Math.cos(th) * rr;
             const z = gz + Math.sin(th) * rr;
             if (!this.isOnIsland(x, z, 2)) continue;
-            if (Math.abs(x) < 7 && z > -1085 && z < 1155) continue;
-            if (Math.abs(z) < 7 && x > -1405 && x < 1155) continue;
+            if (Math.abs(x) < 10 && z > -1085 && z < 1155) continue;
+            if (Math.abs(z) < 10 && x > -1405 && x < 1155) continue;
             if (x > DAM_RECT.x0 && x < DAM_RECT.x1 && z > DAM_RECT.z0 && z < DAM_RECT.z1) continue;
             let inBuilding = false;
             for (const b of this.buildings) {

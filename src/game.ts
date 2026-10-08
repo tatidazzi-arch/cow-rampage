@@ -357,13 +357,13 @@ constructor() {}
       }
       placeNPC(x, z);
     }
-    // calçadas das avenidas (~30m, lados alternados)
+    // calçadas das avenidas largas (~30m, lados alternados, sobre a calçada 6..9)
     for (let z = -1050, s = 1; z <= 1150; z += 30, s *= -1) {
-      const px = s * 7 + (worldRand() - 0.5) * 3;
+      const px = s * 8 + (worldRand() - 0.5) * 2;
       if (npcSpotOk(px, z)) placeNPC(px, z);
     }
     for (let x = -1370, s = 1; x <= 1150; x += 30, s *= -1) {
-      const pz = s * 7 + (worldRand() - 0.5) * 3;
+      const pz = s * 8 + (worldRand() - 0.5) * 2;
       if (npcSpotOk(x, pz)) placeNPC(x, pz);
     }
     // ruas da cidade (~40m)
@@ -1676,10 +1676,10 @@ constructor() {}
       const th = m.rotation.y;
       const cos = Math.cos(th);
       const sin = Math.sin(th);
-      // caixa do carro no referencial local (comprido em Z: 3.2 x 1.6)
+      // caixa do carro no referencial local (R8: 4.4 x 2.0 + metade da vaca)
       const lx = dx * cos - dz * sin;
       const lz = dx * sin + dz * cos;
-      if (Math.abs(lx) > 1.7 || Math.abs(lz) > 3.6) continue;
+      if (Math.abs(lx) > 1.9 || Math.abs(lz) > 4.4) continue;
       this.carHitCD = 1.1;
       // quem manda é a direção do carro (atropelou) + o embalo que a vaca tinha
       const dirX = car.axis === 'z' ? 0 : car.dir;
@@ -1696,6 +1696,16 @@ constructor() {}
       this.input.rumble(1, 0.8, 300);
       this.chaos = Math.min(100, this.chaos + 3);
       return;
+    }
+  }
+
+  /** Carros longe (>250m) nem desenham: cada R8 tem 217k vértices. */
+  private updateCarVisibility() {
+    const t = this.cow.group.position;
+    for (const c of this.world.cars) {
+      const dx = c.mesh.position.x - t.x;
+      const dz = c.mesh.position.z - t.z;
+      c.mesh.visible = dx * dx + dz * dz < 62500;
     }
   }
 
@@ -1814,6 +1824,7 @@ constructor() {}
 
     this.updateCow(dt);
     this.updateCarsHit(dt);
+    this.updateCarVisibility();
     this.updateNPCs(dt);
     this.updateBullets();
     this.world.updateAnims(dt);

@@ -92,7 +92,8 @@ export class Cow {
       new THREE.MeshBasicMaterial({ color: 0xff8830 }),
     );
     flame.position.set(0, 2.7, -1.7);
-    flame.rotation.x = Math.PI;
+    // escapamento pra TRÁS (foguete empurra pra frente)
+    flame.rotation.x = -Math.PI / 2 - 0.35;
     flame.visible = false;
     pack.add(flame);
     this.flame = flame;

@@ -1265,6 +1265,7 @@ constructor() {}
   private updateCow(dt: number) {
     const running = this.input.isDown('ShiftLeft', 'ShiftRight');
     const speed = running ? 11 : 6;
+    const thrusting = this.gadget === 'jetpack' && this.input.isDown('Space');
 
     // CAÍDA ALTA: de barriga pra cima, balançando de um lado pro outro.
     // Controles travados (só freia); levanta sozinha ou apertando pular.
@@ -1308,7 +1309,8 @@ constructor() {}
         // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
         body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
         this.cow.yaw = Math.atan2(move.x, move.z);
-      } else {
+      } else if (!thrusting) {
+        // freia só quando não tem input; com o foguete ligado o empurrão manda
         const f = Math.max(0, 1 - dt * 12);
         body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
       }
@@ -1332,12 +1334,21 @@ constructor() {}
         this.wasSwimming = false;
       }
 
-      // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = voar (sem limite: é atômico!)
-      const thrusting = this.gadget === 'jetpack' && this.input.isDown('Space');
+      // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = FOGUETE:
+      // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
       this.cow.setFlame(thrusting);
       if (thrusting) {
+        this.cow.yaw = this.camYaw;
+        const ROCKET = 15; // alvo (o damping da física segura em ~13 m/s = acima da corrida)
+        const blend = Math.min(1, dt * 3);
         const bv = body.linvel();
-        body.setLinvel({ x: bv.x, y: 14, z: bv.z }, true);
+        const fx = Math.sin(this.camYaw);
+        const fz = Math.cos(this.camYaw);
+        body.setLinvel({
+          x: bv.x + (fx * ROCKET - bv.x) * blend,
+          y: 14,
+          z: bv.z + (fz * ROCKET - bv.z) * blend,
+        }, true);
         if (Math.random() < 0.5) {
           this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xff8830);
         }

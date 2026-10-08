@@ -91,7 +91,7 @@ export class Cow {
       new THREE.ConeGeometry(0.5, 1.4, 8),
       new THREE.MeshBasicMaterial({ color: 0xff8830 }),
     );
-    flame.position.set(0, 2.7, -1.7);
+    flame.position.set(0, 2.0, -1.7);
     // escapamento pra TRÁS (foguete empurra pra frente)
     flame.rotation.x = -Math.PI / 2 - 0.35;
     flame.visible = false;
@@ -147,14 +147,17 @@ export class Cow {
       wrap.add(inner);
       // deitada no dorso (eixo comprido ao longo da espinha, ~2m)
       wrap.position.set(0, 0, 0);
-      pack.add(wrap);
-      // mede de verdade e assenta no dorso (sem chute)
+      // mede no referencial LOCAL (sem pai): setFromObject usa o MUNDO, então
+      // medir depois do pack.add misturava a altura da vaca no offset e a bomba
+      // afundava ~1m (ficava embaixo do dorso)
       wrap.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(wrap);
       const bs = bb.getSize(new THREE.Vector3());
-      const baseY = 3.0;
+      // dorso do FBX em ~2.15 (local): base um pouco dentro pra assentar
+      const baseY = 2.05;
       wrap.position.set(0, baseY - bb.min.y, -0.3);
-      const cy = baseY - bb.min.y + (bb.max.y - bb.min.y) / 2;
+      pack.add(wrap);
+      const cy = baseY + (bb.max.y - bb.min.y) / 2;
       // faixas vermelhas no corpo da bomba
       const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
       const ringR = Math.max(bs.x, bs.y) / 2 + 0.03;

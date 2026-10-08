@@ -52,6 +52,8 @@ export class Game {
   private wallRunNormal = new THREE.Vector3();
   /** maior velocidade de queda desde o último toque no chão (tombo) */
   private fallV = 0;
+  /** cooldown do atropelamento (evita reatingir todo frame encostado) */
+  private carHitCD = 0;
   // --- Pool de partículas: 1 único InstancedMesh (antes: 1 Mesh+BoxGeometry por
   // faísca, criada a cada frame pelo jetpack e nunca liberada -> GC + vazamento GPU).
   private particleIM: THREE.InstancedMesh | null = null;
@@ -1305,7 +1307,7 @@ constructor() {}
       if (move.length() > 0) {
         // normaliza só se passar de 1 (preserva a força do joystick analógico)
         if (move.length() > 1) move.normalize();
-        move.multiplyScalar(speed * (inWater ? 0.45 : 1));
+        move.multiplyScalar(speed);
         // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
         body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
         this.cow.yaw = Math.atan2(move.x, move.z);
@@ -1315,16 +1317,22 @@ constructor() {}
         body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
       }
 
-      // nado: flutua + splash (antes do pulo pra remada funcionar)
+      // nado: SÓ BOIA — empuxo suave até a linha d'água (nada de sugar) e o
+      // pulo não é cancelado (se está subindo, a boia não atrapalha).
       if (inWater) {
         if (!this.wasSwimming) {
-          this.showMessage('🐄🌊');
+          // entrou na água: só um splash (sem travar/sugar nada)
           this.wasSwimming = true;
+          this.spawnParticles(t.x, 0.2, t.z, 12, 0x3a8fcf);
+          this.input.rumble(0.4, 0.3, 150);
         }
         const cw = body.translation();
-        const buoyVY = (0.6 - cw.y) * 8;
         const wv = body.linvel();
-        body.setLinvel({ x: wv.x, y: buoyVY, z: wv.z }, true);
+        // empuxo + compensação da gravidade do passo = boia estável na linha d'água
+        const gcomp = 9.81 * dt;
+        const spring = Math.max(-3, Math.min(4, (0.7 - cw.y) * 3));
+        const vy = wv.y > 4 ? wv.y : wv.y + (spring - wv.y) * Math.min(1, dt * 5) + gcomp;
+        body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
         this.swimSplashT -= dt;
         if (this.swimSplashT <= 0 && Math.hypot(wv.x, wv.z) > 2) {
           this.swimSplashT = 0.3;
@@ -1357,8 +1365,10 @@ constructor() {}
       const jump = !thrusting && this.input.consumeOnce('Space');
       if (jump) {
         if (inWater) {
+          // pulo de verdade na água: dá pra saltar pra fora
           const v = body.linvel();
-          body.setLinvel({ x: v.x * 0.6 + fwd.x * 3, y: 5, z: v.z * 0.6 + fwd.z * 3 }, true);
+          body.setLinvel({ x: v.x + fwd.x * 3, y: 9, z: v.z + fwd.z * 3 }, true);
+          this.cow.resetJumps();
           this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
         } else if (this.cow.jumpCount < this.cow.maxJumps) {
           this.cow.applyJump(running ? 10 : 8.5);
@@ -1645,6 +1655,42 @@ constructor() {}
     }
   }
 
+  /** Hitbox dos carros: encostou/foi atropelado -> arremessada pra frente e vira. */
+  private updateCarsHit(dt: number) {
+    if (this.carHitCD > 0) this.carHitCD -= dt;
+    const t = this.cow.body.translation();
+    if (t.y > 4.5) return; // voando por cima: sem hitbox
+    if (this.carHitCD > 0) return;
+    for (const car of this.world.cars) {
+      const m = car.mesh;
+      const dx = t.x - m.position.x;
+      const dz = t.z - m.position.z;
+      const th = m.rotation.y;
+      const cos = Math.cos(th);
+      const sin = Math.sin(th);
+      // caixa do carro no referencial local (comprido em Z: 3.2 x 1.6)
+      const lx = dx * cos - dz * sin;
+      const lz = dx * sin + dz * cos;
+      if (Math.abs(lx) > 1.7 || Math.abs(lz) > 3.6) continue;
+      this.carHitCD = 1.1;
+      // quem manda é a direção do carro (atropelou) + o embalo que a vaca tinha
+      const dirX = car.axis === 'z' ? 0 : car.dir;
+      const dirZ = car.axis === 'z' ? car.dir : 0;
+      const v = this.cow.body.linvel();
+      this.cow.getUp(); // se estava de barriga pra cima, levanta com o impacto
+      this.cow.body.setLinvel({
+        x: dirX * 9 + v.x * 0.4,
+        y: 8,
+        z: dirZ * 9 + v.z * 0.4,
+      }, true);
+      this.cow.startFlip();
+      this.spawnParticles(m.position.x, 1.4, m.position.z, 12, 0xffdd55);
+      this.input.rumble(1, 0.8, 300);
+      this.chaos = Math.min(100, this.chaos + 3);
+      return;
+    }
+  }
+
   private updateBullets() {
     for (const c of this.world.cannons) {
       if (c.loadedNPC !== null) {
@@ -1759,6 +1805,7 @@ constructor() {}
     if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
 
     this.updateCow(dt);
+    this.updateCarsHit(dt);
     this.updateNPCs(dt);
     this.updateBullets();
     this.world.updateAnims(dt);

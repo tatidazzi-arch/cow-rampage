@@ -1317,9 +1317,9 @@ constructor() {}
         body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
       }
 
-      // nado: SÓ BOIA — empuxo suave até a linha d'água (nada de sugar) e o
-      // pulo não é cancelado (se está subindo, a boia não atrapalha).
-      if (inWater) {
+      // nado: SÓ BOIA — a física de água só age quando a vaca está NA água
+      // (perto da linha). Voando/pulando por cima, é física normal de ar.
+      if (inWater && t.y <= 1.6) {
         if (!this.wasSwimming) {
           // entrou na água: só um splash (sem travar/sugar nada)
           this.wasSwimming = true;
@@ -1328,11 +1328,15 @@ constructor() {}
         }
         const cw = body.translation();
         const wv = body.linvel();
-        // empuxo + compensação da gravidade do passo = boia estável na linha d'água
-        const gcomp = 9.81 * dt;
-        const spring = Math.max(-3, Math.min(4, (0.7 - cw.y) * 3));
-        const vy = wv.y > 4 ? wv.y : wv.y + (spring - wv.y) * Math.min(1, dt * 5) + gcomp;
-        body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
+        if (wv.y <= 4) {
+          // arrasto da água CRESCE com a velocidade: queda forte é freada rápido
+          // (antes a vaca afundava como pedra) e o empuxo devolve ela pra superfície
+          const k = Math.min(0.6, dt * (6 + Math.max(0, -wv.y) * 2));
+          const spring = Math.max(-3, Math.min(4, (0.7 - cw.y) * 3));
+          const vy = wv.y + (spring - wv.y) * k + 9.81 * dt;
+          body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
+        }
+        // se está subindo (pulo/foguete > 4 m/s), a água não segura
         this.swimSplashT -= dt;
         if (this.swimSplashT <= 0 && Math.hypot(wv.x, wv.z) > 2) {
           this.swimSplashT = 0.3;

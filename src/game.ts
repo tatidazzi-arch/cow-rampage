@@ -1691,7 +1691,7 @@ constructor() {}
         y: 8,
         z: dirZ * 9 + v.z * 0.4,
       }, true);
-      this.cow.startFlip();
+      // só é arremessada pra frente (sem mortal/loop)
       this.spawnParticles(m.position.x, 1.4, m.position.z, 12, 0xffdd55);
       this.input.rumble(1, 0.8, 300);
       this.chaos = Math.min(100, this.chaos + 3);

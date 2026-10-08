@@ -1329,11 +1329,15 @@ constructor() {}
         const cw = body.translation();
         const wv = body.linvel();
         if (wv.y <= 4) {
-          // arrasto da água CRESCE com a velocidade: queda forte é freada rápido
-          // (antes a vaca afundava como pedra) e o empuxo devolve ela pra superfície
-          const k = Math.min(0.6, dt * (6 + Math.max(0, -wv.y) * 2));
-          const spring = Math.max(-3, Math.min(4, (0.7 - cw.y) * 3));
-          const vy = wv.y + (spring - wv.y) * k + 9.81 * dt;
+          // Empuxo natural: a GRAVIDADE CONTINUA (o motor aplica -9.81); a boia
+          // cresce conforme a vaca submerge e a água amortece o movimento.
+          // Equilíbrio em ~y 0.3 (uns 60% do corpo na água) com balanço suave.
+          const KP = 22;   // força do empuxo
+          const KD = 4.5;  // arrasto linear (deixa balançar)
+          const KQ = 0.35; // arrasto quadrático (segura queda forte sem afundar)
+          const sub = 0.75 - cw.y; // >0 = submersa
+          const acc = KP * sub - KD * wv.y - KQ * wv.y * Math.abs(wv.y);
+          const vy = Math.max(-12, Math.min(8, wv.y + acc * dt));
           body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
         }
         // se está subindo (pulo/foguete > 4 m/s), a água não segura

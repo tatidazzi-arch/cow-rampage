@@ -48,6 +48,8 @@ export class Game {
   private physAcc = 0;
   /** maior velocidade de queda desde o último toque no chão (tombo) */
   private fallV = 0;
+  /** embalo pós-foguete: enquanto > 0, sem freio brusco (desliza até parar) */
+  private coastT = 0;
   /** cooldown do atropelamento (evita reatingir todo frame encostado) */
   private carHitCD = 0;
   // --- Pool de partículas: 1 único InstancedMesh (antes: 1 Mesh+BoxGeometry por
@@ -1261,6 +1263,7 @@ constructor() {}
     const running = this.input.isDown('ShiftLeft', 'ShiftRight');
     const speed = running ? 11 : 6;
     const thrusting = this.gadget === 'jetpack' && this.input.isDown('Space');
+    if (this.coastT > 0) this.coastT -= dt;
 
     // CAÍDA ALTA: de barriga pra cima, balançando de um lado pro outro.
     // Controles travados (só freia); levanta sozinha ou apertando pular.
@@ -1300,12 +1303,24 @@ constructor() {}
       // normaliza só se passar de 1 (preserva a força do joystick analógico)
       if (move.length() > 1) move.normalize();
       move.multiplyScalar(speed);
-      // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
-      body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
+      if (this.coastT > 0) {
+        // no embalo do foguete, o input dirige sem matar a velocidade (mistura)
+        const blendM = Math.min(1, dt * 2.5);
+        body.setLinvel({
+          x: currentVel.x + (move.x - currentVel.x) * blendM,
+          y: currentVel.y,
+          z: currentVel.z + (move.z - currentVel.z) * blendM,
+        }, true);
+      } else {
+        // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
+        body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
+      }
       this.cow.yaw = Math.atan2(move.x, move.z);
     } else if (!thrusting) {
-      // freia só quando não tem input; com o foguete ligado o empurrão manda
-      const f = Math.max(0, 1 - dt * 12);
+      // sem input: freio forte normal; mas no embalo do foguete é só um
+      // arrasto leve (mantém o embalo diminuindo até 0, sem parar seco)
+      const coasting = this.coastT > 0;
+      const f = Math.max(0, 1 - dt * (coasting ? 1.2 : 12));
       body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
     }
 
@@ -1344,9 +1359,10 @@ constructor() {}
 
     // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = FOGUETE:
     // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
-    this.cow.setFlame(thrusting);
-    if (thrusting) {
-      this.cow.yaw = this.camYaw;
+      this.cow.setFlame(thrusting);
+      if (thrusting) {
+        this.coastT = 3.0; // ao soltar, desliza ~3s até o freio normal voltar
+        this.cow.yaw = this.camYaw;
       const ROCKET = 150; // alvo 10x (o damping da física segura em ~130 m/s)
       const blend = Math.min(1, dt * 3);
       const bv = body.linvel();

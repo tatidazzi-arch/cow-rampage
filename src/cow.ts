@@ -152,20 +152,10 @@ export class Cow {
       // afundava ~1m (ficava embaixo do dorso)
       wrap.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(wrap);
-      const bs = bb.getSize(new THREE.Vector3());
-      // dorso do FBX em ~2.15 (local): base um pouco dentro pra assentar
-      const baseY = 2.05;
+      // dorso quase plano em 1.95-2.01 no trecho da bomba: base encostando
+      const baseY = 1.95;
       wrap.position.set(0, baseY - bb.min.y, -0.3);
       pack.add(wrap);
-      const cy = baseY + (bb.max.y - bb.min.y) / 2;
-      // faixas vermelhas no corpo da bomba
-      const bandMat = new THREE.MeshLambertMaterial({ color: 0xcc2222 });
-      const ringR = Math.max(bs.x, bs.y) / 2 + 0.03;
-      for (const dz of [-0.45, 0.45]) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, 0.07, 8, 20), bandMat);
-        ring.position.set(0, cy, -0.3 + dz);
-        pack.add(ring);
-      }
       for (const t of fallback) t.visible = false;
     } catch (err) {
       console.warn('Bomba nao carregou, usando cilindros:', err);

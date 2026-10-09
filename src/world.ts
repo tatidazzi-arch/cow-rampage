@@ -127,7 +127,7 @@ export class World {
   private pumpT = 0;
   /** Animados do mapa-guia: moinho, carros, fumaça, fogueira */
   windmillBlades: THREE.Group | null = null;
-  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number }[] = [];
+  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number; v: number; blockT: number }[] = [];
   smoke: { mesh: THREE.Mesh; speed: number; maxY: number }[] = [];
   fireLight: THREE.PointLight | null = null;
   private animT = 0;
@@ -480,8 +480,14 @@ private buildRoads() {
     this.buoyPos = spots.map((p) => ({ x: p.x, z: p.z }));
   }
 
-  /** Templates dos 8 prédios OBJ (medidos uma vez, clonados). */
-  private buildingTemplates: { group: THREE.Group; halfW: number; halfD: number; height: number; minY: number }[] = [];
+  /** Templates dos 8 prédios OBJ (medidos uma vez, clonados). Hitbox em degrau:
+   *  pedestal largo embaixo + fuste estreito em cima, concêntricos na torre. */
+  private buildingTemplates: {
+    group: THREE.Group; halfW: number; halfD: number; height: number; minY: number;
+    tcx: number; tcz: number;
+    footHalfW: number; footHalfD: number; footH: number;
+    shaftHalfW: number; shaftHalfD: number;
+  }[] = [];
   private buildingLoading: Promise<void> | null = null;
 
   private buildingMat(name: string): THREE.Material {
@@ -526,6 +532,7 @@ private buildRoads() {
       const groupNames: string[] = [];
       let bi = 0;
 const towerBox = new THREE.Box3();
+      const vertSources: { gp: THREE.BufferAttribute; gi: THREE.BufferAttribute | null; me: number[]; start: number; end: number }[] = [];
       const partLog: string[] = [];
       model.updateMatrixWorld(true);
       model.traverse((o) => {
@@ -561,6 +568,12 @@ const towerBox = new THREE.Box3();
             const flatPlate = bs.y < 3 && Math.max(bs.x, bs.z) > 30;
             if (!/grass|ground|base|plane|terrain|road|sidewalk|asphalt|groundcover|vegetation/i.test(nm) && !flatPlate) {
               towerBox.union(b);
+              if (gp) {
+                vertSources.push({
+                  gp, gi: gi ?? null, me: [...m.matrixWorld.elements],
+                  start: gr.start, end: Math.min(gr.start + gr.count, gi ? gi.count : vCount),
+                });
+              }
             }
           }
         });
@@ -568,10 +581,39 @@ const towerBox = new THREE.Box3();
       model.updateMatrixWorld(true);
       const box = towerBox.isEmpty() ? new THREE.Box3().setFromObject(model) : towerBox;
       const size = box.getSize(new THREE.Vector3());
+      // centro da torre (o modelo nem sempre é centrado: sem isso o visual desloca do collider)
+      const tcx = (box.min.x + box.max.x) / 2;
+      const tcz = (box.min.z + box.max.z) / 2;
+      // pegada por faixa de altura (1 vértice a cada 4): pedestal (20% de baixo)
+      // vs fuste. Larguras simétricas em torno do centro (concêntrico e seguro).
+      const splitY = box.min.y + size.y * 0.2;
+      let fMinX = tcx, fMaxX = tcx, fMinZ = tcz, fMaxZ = tcz;
+      let sMinX = tcx, sMaxX = tcx, sMinZ = tcz, sMaxZ = tcz;
+      for (const vs of vertSources) {
+        const me = vs.me;
+        for (let k = vs.start; k < vs.end; k += 4) {
+          const vi = vs.gi ? vs.gi.getX(k) : k;
+          const x = vs.gp.getX(vi), y = vs.gp.getY(vi), z = vs.gp.getZ(vi);
+          const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
+          const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
+          const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
+          if (wy < splitY) {
+            if (wx < fMinX) fMinX = wx; if (wx > fMaxX) fMaxX = wx;
+            if (wz < fMinZ) fMinZ = wz; if (wz > fMaxZ) fMaxZ = wz;
+          } else {
+            if (wx < sMinX) sMinX = wx; if (wx > sMaxX) sMaxX = wx;
+            if (wz < sMinZ) sMinZ = wz; if (wz > sMaxZ) sMaxZ = wz;
+          }
+        }
+      }
+      const sym = (a: number, b: number, c: number) => Math.max(b - c, c - a, 0.5);
       console.log(`[building] ${f}.obj meshes=${meshCount} size=${size.x.toFixed(1)}x${size.y.toFixed(1)}x${size.z.toFixed(1)} parts=${partLog.join('|').slice(0, 400)}`);
       this.buildingTemplates.push({
         group: model as unknown as THREE.Group,
         halfW: size.x / 2, halfD: size.z / 2, height: size.y, minY: box.min.y,
+        tcx, tcz,
+        footHalfW: sym(fMinX, fMaxX, tcx), footHalfD: sym(fMinZ, fMaxZ, tcz), footH: size.y * 0.2,
+        shaftHalfW: sym(sMinX, sMaxX, tcx), shaftHalfD: sym(sMinZ, sMaxZ, tcz),
       });
     }
   }
@@ -624,7 +666,11 @@ const towerBox = new THREE.Box3();
     }
     const g = new THREE.Group();
     g.add(tpl.group.clone(true));
-    g.position.set(bx, -tpl.minY * s, bz);
+    // centraliza a torre no (bx,bz): desconta o centro do modelo (girado)
+    const ca = rotIdx * Math.PI / 2;
+    const ox = (tpl.tcx * Math.cos(ca) + tpl.tcz * Math.sin(ca)) * s;
+    const oz = (-tpl.tcx * Math.sin(ca) + tpl.tcz * Math.cos(ca)) * s;
+    g.position.set(bx - ox, -tpl.minY * s, bz - oz);
     g.scale.setScalar(s);
     g.rotation.y = rotIdx * Math.PI / 2;
     // sombra só perto do centro (além de 200m não projeta: economiza o shadow map)
@@ -636,8 +682,19 @@ const towerBox = new THREE.Box3();
     }
     this.scene.add(g);
     const body = this.fixedBody(bx, bz);
+    // hitbox em degrau: pedestal largo embaixo + fuste estreito em cima
+    // (antes era 1 caixa da largura da base até o topo = parede invisível na torre)
+    const odd = rotIdx % 2 === 1;
+    const footH = tpl.footH * s;
+    const fW = (odd ? tpl.footHalfD : tpl.footHalfW) * s;
+    const fD = (odd ? tpl.footHalfW : tpl.footHalfD) * s;
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(fW, footH / 2, fD).setTranslation(0, footH / 2, 0), body);
+    const shW = (odd ? tpl.shaftHalfD : tpl.shaftHalfW) * s;
+    const shD = (odd ? tpl.shaftHalfW : tpl.shaftHalfD) * s;
     const collider = this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfW, bh / 2, halfD).setTranslation(0, bh / 2, 0), body);
+      RAPIER.ColliderDesc.cuboid(shW, (bh - footH) / 2, shD)
+        .setTranslation(0, footH + (bh - footH) / 2, 0), body);
     this.buildings.push({
       id: this.nextId(), x: bx, z: bz, halfW, halfD, height: bh,
       mesh: g, body, collider,
@@ -1284,7 +1341,8 @@ const towerBox = new THREE.Box3();
       car.position.set(i % 2 === 0 ? -3 : 3, 0.1, -1000 + i * 420);
       if (i % 2 === 1) car.rotation.y = Math.PI;
       this.scene.add(car);
-      this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1060, max: 1130 });
+      const sp = 10 + (i % 3) * 2;
+      this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1060, max: 1130, v: sp, blockT: 0 });
     }
     for (let i = 0; i < 5; i++) {
       const car = mkCar(carColors[(i + 2) % carColors.length]);
@@ -1292,7 +1350,8 @@ const towerBox = new THREE.Box3();
       car.rotation.y = i % 2 === 0 ? Math.PI / 2 : -Math.PI / 2;
       car.position.set(-1300 + i * 520, 0.1, i % 2 === 0 ? -3 : 3);
       this.scene.add(car);
-      this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: 10 + (i % 3) * 2, min: -1380, max: 1130 });
+      const sp = 10 + (i % 3) * 2;
+      this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1380, max: 1130, v: sp, blockT: 0 });
     }
     this.logProp('traffic', 0, 0);
     void this.loadCarModel();
@@ -2197,17 +2256,7 @@ const { x: cx, z: cz } = MINE;
     }
     this.animT += dt;
     if (this.windmillBlades) this.windmillBlades.rotation.z += dt * 1.8;
-    for (const c of this.cars) {
-      if (c.axis === 'z') {
-        c.mesh.position.z += c.speed * c.dir * dt;
-        if (c.mesh.position.z > c.max) c.mesh.position.z = c.min;
-        if (c.mesh.position.z < c.min) c.mesh.position.z = c.max;
-      } else {
-        c.mesh.position.x += c.speed * c.dir * dt;
-        if (c.mesh.position.x > c.max) c.mesh.position.x = c.min;
-        if (c.mesh.position.x < c.min) c.mesh.position.x = c.max;
-      }
-    }
+    // carros andam no Game.updateCars (precisa ver vaca/NPCs/canhões/prédios)
     for (const s of this.smoke) {
       s.mesh.position.y += s.speed * dt;
       s.mesh.rotation.y += dt * 0.4;

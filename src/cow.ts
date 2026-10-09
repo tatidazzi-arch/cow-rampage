@@ -91,7 +91,7 @@ export class Cow {
       new THREE.ConeGeometry(0.5, 1.4, 8),
       new THREE.MeshBasicMaterial({ color: 0xff8830 }),
     );
-    flame.position.set(0, 2.0, -1.7);
+    flame.position.set(0, 2.0, -1.2);
     // escapamento pra TRÁS (foguete empurra pra frente)
     flame.rotation.x = -Math.PI / 2 - 0.35;
     flame.visible = false;
@@ -152,9 +152,11 @@ export class Cow {
       // afundava ~1m (ficava embaixo do dorso)
       wrap.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(wrap);
-      // dorso quase plano em 1.95-2.01 no trecho da bomba: base encostando
+      // dorso quase plano em 1.95-2.01 no trecho da bomba: base encostando.
+      // centro deslocado pra frente: nariz perto da cabeça
       const baseY = 1.95;
-      wrap.position.set(0, baseY - bb.min.y, -0.3);
+      const bombZ = 0.2;
+      wrap.position.set(0, baseY - bb.min.y, bombZ);
       pack.add(wrap);
       for (const t of fallback) t.visible = false;
     } catch (err) {

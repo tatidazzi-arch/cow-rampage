@@ -1705,7 +1705,71 @@ constructor() {}
     for (const c of this.world.cars) {
       const dx = c.mesh.position.x - t.x;
       const dz = c.mesh.position.z - t.z;
-      c.mesh.visible = dx * dx + dz * dz < 62500;
+      c.mesh.visible = dx * dx + dz * dz < 62500; // 250m
+    }
+  }
+
+  /** Trânsito: freia ante obstáculo (não passa por cima de nada) e faz
+   *  meia-volta no fim da rua ou se emperrar — nunca some/teleporta. */
+  private updateCars(dt: number) {
+    const cp = this.cow.group.position;
+    const cowY = this.cow.body.translation().y;
+    for (const c of this.world.cars) {
+      const m = c.mesh;
+      const fx = c.axis === 'z' ? 0 : c.dir;
+      const fz = c.axis === 'z' ? c.dir : 0;
+      const ax = m.position.x + fx * 7;
+      const az = m.position.z + fz * 7;
+      // só desvia do que está perto da vaca (longe, a avenida é livre)
+      const nearCow = Math.abs(m.position.x - cp.x) < 80 && Math.abs(m.position.z - cp.z) < 80;
+      let blocked = false;
+      if (nearCow) {
+        if (Math.abs(cp.x - ax) < 4 && Math.abs(cp.z - az) < 4 && cowY < 4) blocked = true;
+        if (!blocked) {
+          for (const n of this.npcs) {
+            const st = n.state;
+            if (st === 'carried' || st === 'inCannon' || st === 'launched') continue;
+            const t = n.body.translation();
+            const dx = t.x - ax, dz = t.z - az;
+            if (dx * dx + dz * dz < 9) { blocked = true; break; }
+          }
+        }
+        if (!blocked) {
+          for (const cn of this.world.cannons) {
+            const dx = cn.x - ax, dz = cn.z - az;
+            if (dx * dx + dz * dz < 9) { blocked = true; break; }
+          }
+        }
+        if (!blocked) {
+          for (const b of this.world.buildings) {
+            if (Math.abs(ax - b.x) < b.halfW + 1 && Math.abs(az - b.z) < b.halfD + 1) { blocked = true; break; }
+          }
+        }
+      }
+      const yawFor = (axis: 'x' | 'z', dir: number) =>
+        axis === 'z' ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+      if (blocked) {
+        c.v = Math.max(0, c.v - dt * 24);
+        c.blockT += dt;
+        if (c.blockT > 4) {
+          // emperrou de vez: meia-volta e segue
+          c.blockT = 0;
+          c.dir *= -1;
+          m.rotation.y = yawFor(c.axis, c.dir);
+        }
+      } else {
+        c.blockT = 0;
+        c.v = Math.min(c.speed, c.v + dt * 14);
+      }
+      if (c.axis === 'z') {
+        m.position.z += c.v * c.dir * dt;
+        if (m.position.z > c.max) { m.position.z = c.max; c.dir = -1; m.rotation.y = yawFor('z', -1); }
+        if (m.position.z < c.min) { m.position.z = c.min; c.dir = 1; m.rotation.y = yawFor('z', 1); }
+      } else {
+        m.position.x += c.v * c.dir * dt;
+        if (m.position.x > c.max) { m.position.x = c.max; c.dir = -1; m.rotation.y = yawFor('x', -1); }
+        if (m.position.x < c.min) { m.position.x = c.min; c.dir = 1; m.rotation.y = yawFor('x', 1); }
+      }
     }
   }
 
@@ -1823,6 +1887,7 @@ constructor() {}
     if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
 
     this.updateCow(dt);
+    this.updateCars(dt);
     this.updateCarsHit(dt);
     this.updateCarVisibility();
     this.updateNPCs(dt);
@@ -1908,6 +1973,7 @@ constructor() {}
       this.updateMenuCamera(dt);
       this.cow.update(dt, 0, false);
       this.world.updateAnims(dt);
+      this.updateCars(dt);
     }
     this.renderer.render(this.scene, this.camera);
   }

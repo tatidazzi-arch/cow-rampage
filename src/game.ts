@@ -1354,7 +1354,7 @@ constructor() {}
       const fz = Math.cos(this.camYaw);
       body.setLinvel({
         x: bv.x + (fx * ROCKET - bv.x) * blend,
-        y: 140,
+        y: 14,
         z: bv.z + (fz * ROCKET - bv.z) * blend,
       }, true);
       if (Math.random() < 0.5) {

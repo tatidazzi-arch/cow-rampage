@@ -480,13 +480,13 @@ private buildRoads() {
     this.buoyPos = spots.map((p) => ({ x: p.x, z: p.z }));
   }
 
-  /** Templates dos 8 prédios OBJ (medidos uma vez, clonados). Hitbox em degrau:
-   *  pedestal largo embaixo + fuste estreito em cima, concêntricos na torre. */
+  /** Templates dos 8 prédios OBJ (medidos uma vez, clonados). Hitbox em degraus:
+   *  pegada medida em 12 faixas de altura (concêntricas na torre); o colisor do
+   *  chão usa só o que o visual tem na altura da vaca (sem parede invisível). */
   private buildingTemplates: {
     group: THREE.Group; halfW: number; halfD: number; height: number; minY: number;
     tcx: number; tcz: number;
-    footHalfW: number; footHalfD: number; footH: number;
-    shaftHalfW: number; shaftHalfD: number;
+    bands: { halfW: number; halfD: number }[];
   }[] = [];
   private buildingLoading: Promise<void> | null = null;
 
@@ -584,11 +584,13 @@ const towerBox = new THREE.Box3();
       // centro da torre (o modelo nem sempre é centrado: sem isso o visual desloca do collider)
       const tcx = (box.min.x + box.max.x) / 2;
       const tcz = (box.min.z + box.max.z) / 2;
-      // pegada por faixa de altura (1 vértice a cada 4): pedestal (20% de baixo)
-      // vs fuste. Larguras simétricas em torno do centro (concêntrico e seguro).
-      const splitY = box.min.y + size.y * 0.2;
-      let fMinX = tcx, fMaxX = tcx, fMinZ = tcz, fMaxZ = tcz;
-      let sMinX = tcx, sMaxX = tcx, sMinZ = tcz, sMaxZ = tcz;
+      // pegada por faixa de altura (12 bandas, 1 vértice a cada 4).
+      // Larguras simétricas em torno do centro (concêntrico e seguro).
+      const NB = 12;
+      const bMinX = new Array<number>(NB).fill(tcx);
+      const bMaxX = new Array<number>(NB).fill(tcx);
+      const bMinZ = new Array<number>(NB).fill(tcz);
+      const bMaxZ = new Array<number>(NB).fill(tcz);
       for (const vs of vertSources) {
         const me = vs.me;
         for (let k = vs.start; k < vs.end; k += 4) {
@@ -597,23 +599,23 @@ const towerBox = new THREE.Box3();
           const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
           const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
           const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
-          if (wy < splitY) {
-            if (wx < fMinX) fMinX = wx; if (wx > fMaxX) fMaxX = wx;
-            if (wz < fMinZ) fMinZ = wz; if (wz > fMaxZ) fMaxZ = wz;
-          } else {
-            if (wx < sMinX) sMinX = wx; if (wx > sMaxX) sMaxX = wx;
-            if (wz < sMinZ) sMinZ = wz; if (wz > sMaxZ) sMaxZ = wz;
-          }
+          const bi = Math.max(0, Math.min(NB - 1, Math.floor(((wy - box.min.y) / size.y) * NB)));
+          if (wx < bMinX[bi]!) bMinX[bi] = wx; if (wx > bMaxX[bi]!) bMaxX[bi] = wx;
+          if (wz < bMinZ[bi]!) bMinZ[bi] = wz; if (wz > bMaxZ[bi]!) bMaxZ[bi] = wz;
         }
       }
-      const sym = (a: number, b: number, c: number) => Math.max(b - c, c - a, 0.5);
+      const bands: { halfW: number; halfD: number }[] = [];
+      for (let i = 0; i < NB; i++) {
+        bands.push({
+          halfW: Math.max(bMaxX[i]! - tcx, tcx - bMinX[i]!, 0.5),
+          halfD: Math.max(bMaxZ[i]! - tcz, tcz - bMinZ[i]!, 0.5),
+        });
+      }
       console.log(`[building] ${f}.obj meshes=${meshCount} size=${size.x.toFixed(1)}x${size.y.toFixed(1)}x${size.z.toFixed(1)} parts=${partLog.join('|').slice(0, 400)}`);
       this.buildingTemplates.push({
         group: model as unknown as THREE.Group,
         halfW: size.x / 2, halfD: size.z / 2, height: size.y, minY: box.min.y,
-        tcx, tcz,
-        footHalfW: sym(fMinX, fMaxX, tcx), footHalfD: sym(fMinZ, fMaxZ, tcz), footH: size.y * 0.2,
-        shaftHalfW: sym(sMinX, sMaxX, tcx), shaftHalfD: sym(sMinZ, sMaxZ, tcz),
+        tcx, tcz, bands,
       });
     }
   }
@@ -682,19 +684,27 @@ const towerBox = new THREE.Box3();
     }
     this.scene.add(g);
     const body = this.fixedBody(bx, bz);
-    // hitbox em degrau: pedestal largo embaixo + fuste estreito em cima
-    // (antes era 1 caixa da largura da base até o topo = parede invisível na torre)
+    // hitbox em 4 degraus concêntricos (chão 0-6m + 3 faixas): o colisor de cada
+    // altura usa SÓ a pegada que o visual tem naquela altura. Sem parede invisível.
     const odd = rotIdx % 2 === 1;
-    const footH = tpl.footH * s;
-    const fW = (odd ? tpl.footHalfD : tpl.footHalfW) * s;
-    const fD = (odd ? tpl.footHalfW : tpl.footHalfD) * s;
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(fW, footH / 2, fD).setTranslation(0, footH / 2, 0), body);
-    const shW = (odd ? tpl.shaftHalfD : tpl.shaftHalfW) * s;
-    const shD = (odd ? tpl.shaftHalfW : tpl.shaftHalfD) * s;
-    const collider = this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(shW, (bh - footH) / 2, shD)
-        .setTranslation(0, footH + (bh - footH) / 2, 0), body);
+    const NB = tpl.bands.length;
+    const groups: [number, number][] = [[0, 6], [6, bh * 0.4], [bh * 0.4, bh * 0.7], [bh * 0.7, bh]];
+    let collider!: RAPIER.Collider;
+    for (const [g0, g1] of groups) {
+      let hw = 0.5, hd = 0.5;
+      for (let i = 0; i < NB; i++) {
+        const y0 = (i / NB) * bh;
+        const y1 = ((i + 1) / NB) * bh;
+        if (y1 > g0 && y0 < g1) {
+          const bb = tpl.bands[i]!;
+          hw = Math.max(hw, (odd ? bb.halfD : bb.halfW) * s);
+          hd = Math.max(hd, (odd ? bb.halfW : bb.halfD) * s);
+        }
+      }
+      const h = Math.max(0.5, g1 - g0);
+      collider = this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(hw, h / 2, hd).setTranslation(0, g0 + h / 2, 0), body);
+    }
     this.buildings.push({
       id: this.nextId(), x: bx, z: bz, halfW, halfD, height: bh,
       mesh: g, body, collider,
@@ -1694,7 +1704,10 @@ const towerBox = new THREE.Box3();
     door.position.set(-100, 2, -1894.9);
     this.scene.add(door);
     const barnBody = this.fixedBody(-100, -1900);
-    this.solidBox(barnBody, 0, 5, 0, 6, 5, 5);
+    // paredes 0..6 + telhado em 2 degraus (antes era 1 caixa até o topo = batia no ar)
+    this.solidBox(barnBody, 0, 3, 0, 6, 3, 5);
+    this.solidBox(barnBody, 0, 7, 0, 5, 1, 5);
+    this.solidBox(barnBody, 0, 9, 0, 1.7, 1, 1.7);
     this.logProp('barn', -100, -1900);
     // silo
     const siloMat = new THREE.MeshLambertMaterial({ color: 0xb8bcc0 });
@@ -2055,7 +2068,9 @@ const towerBox = new THREE.Box3();
       doorM.position.set(hx, hgy + 0.9, hz + 1.8);
       this.scene.add(doorM);
       const hb = this.fixedBody(hx, hz);
-      this.solidBox(hb, 0, hgy + 2.2, 0, 2, 2.2, 1.75);
+      // paredes + base do telhado (antes ia até 4.4 = batia no ar voando)
+      this.solidBox(hb, 0, hgy + 1.25, 0, 2, 1.25, 1.75);
+      this.solidBox(hb, 0, hgy + 2.95, 0, 1.7, 0.45, 1.7);
       this.logProp('goathouse', hx, hz);
     }
     this.buildFenceRect(cx - 6, cz - 12, 10, 8);

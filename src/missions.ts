@@ -44,7 +44,6 @@ export class MissionManager {
     { id: 'vizinhos', title: '🤝 Cumprimente os vizinhos', desc: 'Dê cabeçada em 5 pessoas (é carinho)', target: 5, reward: 40, events: { headbutt: 1 } },
     { id: 'limpeza', title: '🧹 Limpeza urbana', desc: 'Derrube 8 pessoas que estão no caminho', target: 8, reward: 40, events: { knock: 1 } },
     { id: 'passeio', title: '🐴 Passeio a cavalo', desc: 'Carregue alguém no dorso por 12 segundos', target: 12, reward: 50, timedCarry: true },
-    { id: 'escalada', title: '🧗 Teste de escalada', desc: 'Corra na parede de um prédio (pulo duplo no ar)', target: 1, reward: 40, events: { wallrun: 1 } },
     { id: 'fama', title: '⭐ Seja famoso', desc: 'Alcance 400 de DINCOW', target: 400, reward: 100, scoreGoal: true },
   ];
 

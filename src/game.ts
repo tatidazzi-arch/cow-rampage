@@ -46,10 +46,6 @@ export class Game {
   private camPitch = 0.45;
   private started = false;
   private physAcc = 0;
-  private wallRunning = false;
-  private wallRunTimer = 0;
-  private wallRunDir = new THREE.Vector3();
-  private wallRunNormal = new THREE.Vector3();
   /** maior velocidade de queda desde o último toque no chão (tombo) */
   private fallV = 0;
   /** cooldown do atropelamento (evita reatingir todo frame encostado) */
@@ -66,9 +62,6 @@ export class Game {
   private readonly _fwd = new THREE.Vector3();
   private readonly _rgt = new THREE.Vector3();
   private readonly _move = new THREE.Vector3();
-  private readonly _wrRight = new THREE.Vector3();
-  private readonly _wrDir = new THREE.Vector3();
-  private readonly _camFwd = new THREE.Vector3();
   private readonly _carryOff = new THREE.Vector3();
   private readonly _carryTgt = new THREE.Vector3();
   private readonly _camPos = new THREE.Vector3();
@@ -1302,149 +1295,109 @@ constructor() {}
     const currentVel = body.linvel();
     const t = body.translation();
 
-    if (!this.wallRunning) {
-      const inWater = !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2);
-      if (move.length() > 0) {
-        // normaliza só se passar de 1 (preserva a força do joystick analógico)
-        if (move.length() > 1) move.normalize();
-        move.multiplyScalar(speed);
-        // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
-        body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
-        this.cow.yaw = Math.atan2(move.x, move.z);
-      } else if (!thrusting) {
-        // freia só quando não tem input; com o foguete ligado o empurrão manda
-        const f = Math.max(0, 1 - dt * 12);
-        body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
-      }
+    const inWater = !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2);
+    if (move.length() > 0) {
+      // normaliza só se passar de 1 (preserva a força do joystick analógico)
+      if (move.length() > 1) move.normalize();
+      move.multiplyScalar(speed);
+      // velocidade em m/s (sem escalar por dt: fisica usa timestep fixo)
+      body.setLinvel({ x: move.x, y: currentVel.y, z: move.z }, true);
+      this.cow.yaw = Math.atan2(move.x, move.z);
+    } else if (!thrusting) {
+      // freia só quando não tem input; com o foguete ligado o empurrão manda
+      const f = Math.max(0, 1 - dt * 12);
+      body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
+    }
 
-      // nado: SÓ BOIA — a física de água só age quando a vaca está NA água
-      // (perto da linha). Voando/pulando por cima, é física normal de ar.
-      if (inWater && t.y <= 1.6) {
-        if (!this.wasSwimming) {
-          // entrou na água: só um splash (sem travar/sugar nada)
-          this.wasSwimming = true;
-          this.spawnParticles(t.x, 0.2, t.z, 12, 0x3a8fcf);
-          this.input.rumble(0.4, 0.3, 150);
-        }
-        const cw = body.translation();
-        const wv = body.linvel();
-        if (wv.y <= 4) {
-          // Empuxo natural: a GRAVIDADE CONTINUA (o motor aplica -9.81); a boia
-          // cresce conforme a vaca submerge e a água amortece o movimento.
-          // Equilíbrio em ~y 0.3 (uns 60% do corpo na água) com balanço suave.
-          const KP = 22;   // força do empuxo
-          const KD = 4.5;  // arrasto linear (deixa balançar)
-          const KQ = 0.35; // arrasto quadrático (segura queda forte sem afundar)
-          const sub = 0.75 - cw.y; // >0 = submersa
-          const acc = KP * sub - KD * wv.y - KQ * wv.y * Math.abs(wv.y);
-          const vy = Math.max(-12, Math.min(8, wv.y + acc * dt));
-          body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
-        }
-        // se está subindo (pulo/foguete > 4 m/s), a água não segura
-        this.swimSplashT -= dt;
-        if (this.swimSplashT <= 0 && Math.hypot(wv.x, wv.z) > 2) {
-          this.swimSplashT = 0.3;
-          this.spawnParticles(cw.x, 0.2, cw.z, 3, 0x3a8fcf);
-        }
-      } else {
-        this.wasSwimming = false;
+    // nado: SÓ BOIA — a física de água só age quando a vaca está NA água
+    // (perto da linha). Voando/pulando por cima, é física normal de ar.
+    if (inWater && t.y <= 1.6) {
+      if (!this.wasSwimming) {
+        // entrou na água: só um splash (sem travar/sugar nada)
+        this.wasSwimming = true;
+        this.spawnParticles(t.x, 0.2, t.z, 12, 0x3a8fcf);
+        this.input.rumble(0.4, 0.3, 150);
       }
-
-      // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = FOGUETE:
-      // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
-      this.cow.setFlame(thrusting);
-      if (thrusting) {
-        this.cow.yaw = this.camYaw;
-        const ROCKET = 15; // alvo (o damping da física segura em ~13 m/s = acima da corrida)
-        const blend = Math.min(1, dt * 3);
-        const bv = body.linvel();
-        const fx = Math.sin(this.camYaw);
-        const fz = Math.cos(this.camYaw);
-        body.setLinvel({
-          x: bv.x + (fx * ROCKET - bv.x) * blend,
-          y: 14,
-          z: bv.z + (fz * ROCKET - bv.z) * blend,
-        }, true);
-        if (Math.random() < 0.5) {
-          this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xff8830);
-        }
-        this.cow.resetJumps();
+      const cw = body.translation();
+      const wv = body.linvel();
+      if (wv.y <= 4) {
+        // Empuxo natural: a GRAVIDADE CONTINUA (o motor aplica -9.81); a boia
+        // cresce conforme a vaca submerge e a água amortece o movimento.
+        // Equilíbrio em ~y 0.3 (uns 60% do corpo na água) com balanço suave.
+        const KP = 22;   // força do empuxo
+        const KD = 4.5;  // arrasto linear (deixa balançar)
+        const KQ = 0.35; // arrasto quadrático (segura queda forte sem afundar)
+        const sub = 0.75 - cw.y; // >0 = submersa
+        const acc = KP * sub - KD * wv.y - KQ * wv.y * Math.abs(wv.y);
+        const vy = Math.max(-12, Math.min(8, wv.y + acc * dt));
+        body.setLinvel({ x: wv.x, y: vy, z: wv.z }, true);
       }
-      const jump = !thrusting && this.input.consumeOnce('Space');
-      if (jump) {
-        if (inWater) {
-          // pulo de verdade na água: dá pra saltar pra fora
-          const v = body.linvel();
-          body.setLinvel({ x: v.x + fwd.x * 3, y: 9, z: v.z + fwd.z * 3 }, true);
-          this.cow.resetJumps();
-          this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
-        } else if (this.cow.jumpCount < this.cow.maxJumps) {
-          this.cow.applyJump(running ? 10 : 8.5);
-          this.cow.jumpCount++;
-          this.spawnParticles(this.cow.group.position.x, 0.1, this.cow.group.position.z, 4, 0xffffff);
-          // Wall run: double jump NO AR perto de predio
-          if (this.cow.jumpCount >= 2 && !this.cow.grounded) this.tryStartWallRun();
-        }
-      }
-
-      // detecta chao via raycast (exclui o proprio corpo da vaca!)
-      const ray = this.downRay ?? (this.downRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }));
-      ray.origin.x = t.x;
-      ray.origin.y = t.y;
-      ray.origin.z = t.z;
-      const hit = this.physics.castRay(ray, 1.1 * COW_SCALE + 0.4, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, this.cow.body);
-      const wasGrounded = this.cow.grounded;
-      this.cow.grounded = hit !== null && !inWater;
-      if (!this.cow.grounded) {
-        // guarda a maior velocidade de queda pra medir o tombo no pouso
-        this.fallV = Math.max(this.fallV, -currentVel.y);
-      } else {
-        if (!wasGrounded && this.fallV > 16) {
-          // caiu de MUITO alto: tomba de barriga pra cima
-          this.cow.startBellyUp();
-          this.spawnParticles(t.x, t.y - 1.4, t.z, 18, 0xd9c27a);
-          this.input.rumble(1, 0.9, 400);
-          if (this.carrying) this.dropCarried();
-        }
-        this.fallV = 0;
-        if (!wasGrounded) this.cow.resetJumps();
+      // se está subindo (pulo/foguete > 4 m/s), a água não segura
+      this.swimSplashT -= dt;
+      if (this.swimSplashT <= 0 && Math.hypot(wv.x, wv.z) > 2) {
+        this.swimSplashT = 0.3;
+        this.spawnParticles(cw.x, 0.2, cw.z, 3, 0x3a8fcf);
       }
     } else {
-      // WALL RUN: corre ao longo da parede, grudado pela velocidade (sem teleporte)
-      const near = this.nearBuilding(t.x, t.z, 2.5);
-      if (!near) {
-        this.wallRunning = false;
-        this.showMessage('Caiu da parede!');
-      } else {
-        this.wallRunNormal.set(near.nx, 0, near.nz);
-        // direcao ao longo da parede segue a camera (mouse dirige)
-        const right = this._wrRight.set(-near.nz, 0, near.nx);
-        const camFwd = this._camFwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
-        if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
-        this.wallRunDir.copy(right);
-        const back = this.input.isDown('KeyS', 'ArrowDown');
-        const wrDir = this._wrDir.copy(this.wallRunDir);
-        if (back) wrDir.multiplyScalar(-1);
-        const spd = running ? 13 : 9;
-        body.setLinvel({
-          x: wrDir.x * spd - this.wallRunNormal.x * 2,
-          y: 0,
-          z: wrDir.z * spd - this.wallRunNormal.z * 2,
-        }, true);
-        this.cow.yaw = Math.atan2(wrDir.x, wrDir.z);
+      this.wasSwimming = false;
+    }
 
-        this.wallRunTimer -= dt;
-        const leave = this.input.consumeOnce('Space');
-        if (leave) {
-          body.setLinvel({ x: this.wallRunNormal.x * 6, y: 9, z: this.wallRunNormal.z * 6 }, true);
-          this.wallRunning = false;
-          this.cow.resetJumps();
-          this.showMessage('PULOU DA PAREDE!');
-        } else if (this.wallRunTimer <= 0) {
-          this.wallRunning = false;
-          this.cow.resetJumps();
-        }
+    // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = FOGUETE:
+    // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
+    this.cow.setFlame(thrusting);
+    if (thrusting) {
+      this.cow.yaw = this.camYaw;
+      const ROCKET = 15; // alvo (o damping da física segura em ~13 m/s = acima da corrida)
+      const blend = Math.min(1, dt * 3);
+      const bv = body.linvel();
+      const fx = Math.sin(this.camYaw);
+      const fz = Math.cos(this.camYaw);
+      body.setLinvel({
+        x: bv.x + (fx * ROCKET - bv.x) * blend,
+        y: 14,
+        z: bv.z + (fz * ROCKET - bv.z) * blend,
+      }, true);
+      if (Math.random() < 0.5) {
+        this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xff8830);
       }
+      this.cow.resetJumps();
+    }
+    const jump = !thrusting && this.input.consumeOnce('Space');
+    if (jump) {
+      if (inWater) {
+        // pulo de verdade na água: dá pra saltar pra fora
+        const v = body.linvel();
+        body.setLinvel({ x: v.x + fwd.x * 3, y: 9, z: v.z + fwd.z * 3 }, true);
+        this.cow.resetJumps();
+        this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
+      } else if (this.cow.jumpCount < this.cow.maxJumps) {
+        this.cow.applyJump(running ? 10 : 8.5);
+        this.cow.jumpCount++;
+        this.spawnParticles(this.cow.group.position.x, 0.1, this.cow.group.position.z, 4, 0xffffff);
+      }
+    }
+
+    // detecta chao via raycast (exclui o proprio corpo da vaca!)
+    const ray = this.downRay ?? (this.downRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }));
+    ray.origin.x = t.x;
+    ray.origin.y = t.y;
+    ray.origin.z = t.z;
+    const hit = this.physics.castRay(ray, 1.1 * COW_SCALE + 0.4, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, this.cow.body);
+    const wasGrounded = this.cow.grounded;
+    this.cow.grounded = hit !== null && !inWater;
+    if (!this.cow.grounded) {
+      // guarda a maior velocidade de queda pra medir o tombo no pouso
+      this.fallV = Math.max(this.fallV, -currentVel.y);
+    } else {
+      if (!wasGrounded && this.fallV > 16) {
+        // caiu de MUITO alto: tomba de barriga pra cima
+        this.cow.startBellyUp();
+        this.spawnParticles(t.x, t.y - 1.4, t.z, 18, 0xd9c27a);
+        this.input.rumble(1, 0.9, 400);
+        if (this.carrying) this.dropCarried();
+      }
+      this.fallV = 0;
+      if (!wasGrounded) this.cow.resetJumps();
     }
 
     if (this.input.isDown('KeyR')) {
@@ -1463,40 +1416,6 @@ constructor() {}
 
   private onBridge(x: number, z: number): boolean {
     return x > BRIDGE.x0 - 0.5 && x < BRIDGE.x1 + 0.5 && z > BRIDGE.z0 && z < BRIDGE.z1;
-  }
-
-  private nearBuilding(x: number, z: number, maxD: number): { nx: number; nz: number } | null {
-    let best: { nx: number; nz: number } | null = null;
-    let bestD = maxD;
-    for (const b of this.world.buildings) {
-      const cx = Math.max(b.x - b.halfW, Math.min(x, b.x + b.halfW));
-      const cz = Math.max(b.z - b.halfD, Math.min(z, b.z + b.halfD));
-      const dx = x - cx;
-      const dz = z - cz;
-      const d = Math.hypot(dx, dz);
-      if (d < bestD) {
-        bestD = d;
-        best = { nx: dx / (d || 1), nz: dz / (d || 1) };
-      }
-    }
-    return best;
-  }
-
-  private tryStartWallRun() {
-    const t = this.cow.body.translation();
-    const near = this.nearBuilding(t.x, t.z, 4);
-    if (!near) return;
-    this.wallRunning = true;
-    this.wallRunTimer = 2.0;
-    this.wallRunNormal.set(near.nx, 0, near.nz);
-    // direcao ao longo da parede: perpendicular a normal, seguindo a camera
-    const right = this._wrRight.set(-near.nz, 0, near.nx);
-    const camFwd = this._camFwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
-    if (camFwd.dot(right) < 0) right.multiplyScalar(-1);
-    this.wallRunDir.copy(right);
-    this.missions.event('wallrun');
-    this.showMessage(this.randomMsg());
-    this.spawnParticles(t.x, t.y, t.z, 8, 0xffffff);
   }
 
   private updateCarried(dt: number) {

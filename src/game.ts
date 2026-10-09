@@ -1345,18 +1345,18 @@ constructor() {}
     // pulo (na agua vira remada) — com jetpack, ESPAÇO segurao = FOGUETE:
     // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
     this.cow.setFlame(thrusting);
-      if (thrusting) {
-        this.cow.yaw = this.camYaw;
-        const ROCKET = 150; // alvo 10x (o damping da física segura em ~130 m/s)
-        const blend = Math.min(1, dt * 3);
-        const bv = body.linvel();
-        const fx = Math.sin(this.camYaw);
-        const fz = Math.cos(this.camYaw);
-        body.setLinvel({
-          x: bv.x + (fx * ROCKET - bv.x) * blend,
-          y: 140,
-          z: bv.z + (fz * ROCKET - bv.z) * blend,
-        }, true);
+    if (thrusting) {
+      this.cow.yaw = this.camYaw;
+      const ROCKET = 150; // alvo 10x (o damping da física segura em ~130 m/s)
+      const blend = Math.min(1, dt * 3);
+      const bv = body.linvel();
+      const fx = Math.sin(this.camYaw);
+      const fz = Math.cos(this.camYaw);
+      body.setLinvel({
+        x: bv.x + (fx * ROCKET - bv.x) * blend,
+        y: 140,
+        z: bv.z + (fz * ROCKET - bv.z) * blend,
+      }, true);
       if (Math.random() < 0.5) {
         this.spawnParticles(t.x, t.y - 1, t.z, 2, 0xff8830);
       }

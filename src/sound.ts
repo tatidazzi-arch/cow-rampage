@@ -97,21 +97,30 @@ export function toggleMute(): boolean {
 }
 
 /** NPC reclamando de verdade (voz do sistema, em inglês). Um de cada vez,
- *  sem fila: se já tem alguém falando, ignora (evita spam com 350 NPCs). */
+ *  sem fila: se já tem alguém falando, ignora (evita spam com 350 NPCs).
+ *  Emoção pela pontuação e palavras: grito (!!!!), medo (PUT ME DOWN/CANNON),
+ *  indignação (?) — cada uma com ritmo/tom/voz próprios. */
 export function speakComplaint(text: string): void {
   if (muted) return;
   try {
     const ss = window.speechSynthesis;
     if (!ss) return;
     if (ss.speaking || ss.pending) return;
+    const bangs = (text.match(/!/g) || []).length;
+    const fear = /PUT ME DOWN|CANNON|FLY|MOM|FAMILY|SECURITY/i.test(text);
+    const indignant = text.includes('?');
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
-    u.rate = 1.05 + Math.random() * 0.25;
-    u.pitch = 0.9 + Math.random() * 0.5;
-    u.volume = 0.9;
+    // medo = rápido e agudo; grito = rápido e alto; indignação = sobe no fim
+    u.rate = (fear ? 1.35 : 1.1) + Math.random() * 0.2 + Math.min(0.2, bangs * 0.03);
+    u.pitch = Math.min(
+      2,
+      (fear ? 1.4 : indignant ? 1.25 : 1.1) + Math.random() * 0.35 + Math.min(0.3, bangs * 0.05),
+    );
+    u.volume = 1;
     const vs = ss.getVoices();
-    const en = vs.find((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
-    if (en) u.voice = en;
+    const ens = vs.filter((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
+    if (ens.length > 0) u.voice = ens[Math.floor(Math.random() * ens.length)]!;
     ss.speak(u);
   } catch { /* silencioso, nunca quebra o jogo */ }
 }

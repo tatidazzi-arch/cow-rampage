@@ -111,8 +111,8 @@ export function speakComplaint(text: string): void {
     const indignant = text.includes('?');
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
-    // medo = rápido e agudo; grito = rápido e alto; indignação = sobe no fim
-    u.rate = (fear ? 1.35 : 1.1) + Math.random() * 0.2 + Math.min(0.2, bangs * 0.03);
+    // medo = agudo; grito = alto; indignação = sobe no fim. Ritmo calmo (~1.0).
+    u.rate = (fear ? 1.0 : 0.85) + Math.random() * 0.15 + Math.min(0.1, bangs * 0.02);
     u.pitch = Math.min(
       2,
       (fear ? 1.4 : indignant ? 1.25 : 1.1) + Math.random() * 0.35 + Math.min(0.3, bangs * 0.05),

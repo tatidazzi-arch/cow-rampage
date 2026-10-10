@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { worldRand } from './rng';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { speakComplaint } from './sound';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
 
@@ -21,7 +22,7 @@ export interface NPCPhysics {
   tz: number;
   /** levitação da bíblia: timer de faísca */
   levT: number;
-  /** balão de reclamação: segundos restantes visível (0 = escondido) */
+  /** cooldown de reclamação em voz (0 = pode reclamar) */
   sayT: number;
   /** vendedor da loja (não anda, não pode ser pego nem atacado) */
   vendor?: boolean;
@@ -518,30 +519,10 @@ export class NPCFactory {
     'COWS SAY MOO, NOT SORRY?!',
   ];
 
-  private sayParts(npc: NPCPhysics): { sprite: THREE.Sprite; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture } {
-    let s = npc.mesh.userData['saySprite'] as
-      | { sprite: THREE.Sprite; canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }
-      | undefined;
-    if (!s) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 128;
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true, transparent: true }));
-      sprite.scale.set(2.6, 1.05, 1);
-      sprite.position.set(0, 3.1, 0);
-      sprite.visible = false;
-      npc.mesh.add(sprite);
-      s = { sprite, canvas, tex };
-      npc.mesh.userData['saySprite'] = s;
-    }
-    return s;
-  }
-
-  /** NPC reclama (balão de fala por ~2.6s). Sem linha = sorteia uma. */
+  /** NPC reclama EM VOZ ALTA (sem texto). Com cooldown por NPC + trava global
+   *  de 1 fala por vez (senão 350 NPCs viram coral). */
   complain(npc: NPCPhysics, line?: string): void {
-    const { sprite, canvas, tex } = this.sayParts(npc);
+    if (npc.sayT > 0) return;
     let text = line;
     if (!text) {
       const last = npc.mesh.userData['sayLast'] as string | undefined;
@@ -552,74 +533,13 @@ export class NPCFactory {
       text = pick;
       npc.mesh.userData['sayLast'] = text;
     }
-    const g = canvas.getContext('2d')!;
-    const W = canvas.width, H = canvas.height;
-    g.clearRect(0, 0, W, H);
-    // balão branco com borda preta + rabinho
-    g.fillStyle = '#ffffff';
-    g.strokeStyle = '#111111';
-    g.lineWidth = 5;
-    const x0 = 6, y0 = 6, w = W - 12, h = H - 34, r = 22;
-    g.beginPath();
-    g.moveTo(x0 + r, y0);
-    g.lineTo(x0 + w - r, y0);
-    g.quadraticCurveTo(x0 + w, y0, x0 + w, y0 + r);
-    g.lineTo(x0 + w, y0 + h - r);
-    g.quadraticCurveTo(x0 + w, y0 + h, x0 + w - r, y0 + h);
-    g.lineTo(x0 + r, y0 + h);
-    g.quadraticCurveTo(x0, y0 + h, x0, y0 + h - r);
-    g.lineTo(x0, y0 + r);
-    g.quadraticCurveTo(x0, y0, x0 + r, y0);
-    g.closePath();
-    g.fill();
-    g.stroke();
-    g.beginPath();
-    g.moveTo(W / 2 - 14, y0 + h - 2);
-    g.lineTo(W / 2 + 14, y0 + h - 2);
-    g.lineTo(W / 2, H - 6);
-    g.closePath();
-    g.fill();
-    g.stroke();
-    // texto em até 2 linhas
-    g.fillStyle = '#111111';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.font = 'bold 25px Arial';
-    const words = text.split(' ');
-    const lines: string[] = [];
-    let cur = '';
-    for (const wd of words) {
-      const t = cur ? cur + ' ' + wd : wd;
-      if (g.measureText(t).width > W - 44 && cur) {
-        lines.push(cur);
-        cur = wd;
-      } else {
-        cur = t;
-      }
-      if (lines.length === 2) break;
-    }
-    if (cur && lines.length < 2) lines.push(cur);
-    const cy = (H - 28) / 2;
-    if (lines.length <= 1) {
-      g.fillText(lines[0] ?? text, W / 2, cy + 2);
-    } else {
-      g.fillText(lines[0]!, W / 2, cy - 15);
-      g.fillText(lines[1]!, W / 2, cy + 15);
-    }
-    tex.needsUpdate = true;
-    sprite.visible = true;
-    npc.sayT = 2.6;
+    speakComplaint(text);
+    npc.sayT = 4;
   }
 
-  /** Conta o tempo do balão (some sozinho). */
+  /** Desconta o cooldown de fala. */
   tickSay(npc: NPCPhysics, dt: number): void {
-    if (npc.sayT <= 0) return;
-    npc.sayT -= dt;
-    if (npc.sayT <= 0) {
-      npc.sayT = 0;
-      const s = npc.mesh.userData['saySprite'] as { sprite: THREE.Sprite } | undefined;
-      if (s) s.sprite.visible = false;
-    }
+    if (npc.sayT > 0) npc.sayT = Math.max(0, npc.sayT - dt);
   }
 
   syncMesh(npc: NPCPhysics) {

@@ -48,7 +48,35 @@ export function toggleMute(): boolean {
   try {
     window.localStorage.setItem(MUTE_KEY, muted ? '1' : '0');
   } catch { /* ignora */ }
+  if (muted) stopSpeech();
   return muted;
+}
+
+/** NPC reclamando de verdade (voz do sistema, em inglês). Um de cada vez,
+ *  sem fila: se já tem alguém falando, ignora (evita spam com 350 NPCs). */
+export function speakComplaint(text: string): void {
+  if (muted) return;
+  try {
+    const ss = window.speechSynthesis;
+    if (!ss) return;
+    if (ss.speaking || ss.pending) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    u.rate = 1.05 + Math.random() * 0.25;
+    u.pitch = 0.9 + Math.random() * 0.5;
+    u.volume = 0.9;
+    const vs = ss.getVoices();
+    const en = vs.find((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
+    if (en) u.voice = en;
+    ss.speak(u);
+  } catch { /* silencioso, nunca quebra o jogo */ }
+}
+
+export function stopSpeech(): void {
+  try {
+    const ss = window.speechSynthesis;
+    if (ss && (ss.speaking || ss.pending)) ss.cancel();
+  } catch { /* ignora */ }
 }
 
 function tone(o: { f: number; f2?: number; t?: OscillatorType; d: number; v?: number; at?: number }): void {

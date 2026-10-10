@@ -1305,7 +1305,7 @@ constructor() {}
       move.multiplyScalar(speed);
       if (this.coastT > 0) {
         // no embalo do foguete, o input dirige sem matar a velocidade (mistura)
-        const blendM = Math.min(1, dt * 2.5);
+        const blendM = Math.min(1, dt * 1.5);
         body.setLinvel({
           x: currentVel.x + (move.x - currentVel.x) * blendM,
           y: currentVel.y,
@@ -1317,10 +1317,10 @@ constructor() {}
       }
       this.cow.yaw = Math.atan2(move.x, move.z);
     } else if (!thrusting) {
-      // sem input: freio forte normal; mas no embalo do foguete é só um
-      // arrasto leve (mantém o embalo diminuindo até 0, sem parar seco)
+      // sem input: freio forte normal; mas no embalo do foguete é quase nada
+      // de arrasto (desliza muito até parar)
       const coasting = this.coastT > 0;
-      const f = Math.max(0, 1 - dt * (coasting ? 1.2 : 12));
+      const f = Math.max(0, 1 - dt * (coasting ? 0.35 : 12));
       body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
     }
 
@@ -1361,7 +1361,7 @@ constructor() {}
     // sobe E empurra pra frente, na direção da câmera (sem limite: é atômico!)
       this.cow.setFlame(thrusting);
       if (thrusting) {
-        this.coastT = 3.0; // ao soltar, desliza ~3s até o freio normal voltar
+        this.coastT = 8.0; // ao soltar, desliza ~8s até o freio normal voltar
         this.cow.yaw = this.camYaw;
       const ROCKET = 150; // alvo 10x (o damping da física segura em ~130 m/s)
       const blend = Math.min(1, dt * 3);

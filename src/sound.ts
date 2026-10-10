@@ -37,6 +37,50 @@ function ac(): AudioContext | null {
 /** Chamar em gestos do usuário (clique/tecla) pra liberar o áudio no navegador. */
 export function resumeAudio(): void {
   ac();
+  ensureSplash();
+}
+
+/** Splash de verdade (mp3 do pack do usuário). Carrega 1x; se falhar, usa o sintetizado. */
+let splashBuf: AudioBuffer | null = null;
+let splashLoading: Promise<void> | null = null;
+let lastSplashAt = 0;
+
+function ensureSplash(): void {
+  if (splashBuf || splashLoading) return;
+  splashLoading = (async () => {
+    try {
+      const res = await fetch('sounds/splash.mp3');
+      if (!res.ok) return;
+      const ab = await res.arrayBuffer();
+      const c = ac();
+      if (!c) return;
+      splashBuf = await c.decodeAudioData(ab);
+    } catch { /* mantém o sintetizado */ }
+    finally {
+      splashLoading = null;
+    }
+  })();
+  void splashLoading;
+}
+
+function playSplashSample(): boolean {
+  const c = ac();
+  if (!c || !master || muted || !splashBuf) return false;
+  try {
+    const now = performance.now();
+    if (now - lastSplashAt < 250) return true; // não empilha splash em cima de splash
+    lastSplashAt = now;
+    const src = c.createBufferSource();
+    src.buffer = splashBuf;
+    const g = c.createGain();
+    g.gain.value = 0.7;
+    src.connect(g);
+    g.connect(master);
+    src.start();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function isMuted(): boolean {
@@ -183,7 +227,10 @@ export function playSfx(name: SfxName): void {
       tone({ f: 70, f2: 30, t: 'sine', d: 0.6, v: 0.6 });
       break;
     case 'splash':
-      noise({ d: 0.4, f: 1400, f2: 500, v: 0.4, type: 'bandpass', q: 1.2 });
+      ensureSplash();
+      if (!playSplashSample()) {
+        noise({ d: 0.4, f: 1400, f2: 500, v: 0.4, type: 'bandpass', q: 1.2 });
+      }
       break;
     case 'coin':
       tone({ f: 880, t: 'sine', d: 0.09, v: 0.3 });

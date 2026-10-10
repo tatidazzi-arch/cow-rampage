@@ -16,6 +16,7 @@ import {
   setSelectedId, skinById, spendDincow,
 } from './skins';
 import { isTouchDevice, setupTouchControls } from './touch';
+import { isMuted, playSfx, resumeAudio, toggleMute } from './sound';
 
 export class Game {
   private scene!: THREE.Scene;
@@ -220,6 +221,14 @@ constructor() {}
     this.refreshCfgMenu();
   }
 
+  /** Liga/desliga o som (botão 🔊 do HUD ou tecla M). */
+  private toggleSound() {
+    const muted = toggleMute();
+    const btn = document.getElementById('soundBtn');
+    if (btn) btn.textContent = muted ? '🔇' : '🔊';
+    if (!muted) playSfx('click');
+  }
+
   private openCfgMenu() {
     document.getElementById('gamemenu')!.style.display = 'none';
     document.getElementById('configmenu')!.style.display = 'flex';
@@ -418,11 +427,16 @@ constructor() {}
       <div id="carry-status"></div>
       <div id="gadget-status"></div>
       <button id="menuBtn">MENU</button>
+      <button id="soundBtn">${isMuted() ? '🔇' : '🔊'}</button>
     `;
     document.body.appendChild(hud);
     document.getElementById('menuBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.exitToMenu();
+    });
+    document.getElementById('soundBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleSound();
     });
 
     const controls = document.createElement('div');
@@ -430,7 +444,7 @@ constructor() {}
     controls.style.display = 'none';
     controls.textContent = isTouchDevice()
       ? 'Joystick: mover | Arrastar na tela: câmera | Botões: ações | 🎒: aparelho'
-      : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | Shift:Correr | Mouse:Camera | Scroll:Zoom | 1/2/3:Aparelho';
+      : 'WASD:Mover | Espaco:Pular | E:Interagir | F:Soltar | Q:Cabecada | R:Mortal | M:Som | Shift:Correr | Mouse:Camera | Scroll:Zoom | 1/2/3:Aparelho';
     document.body.appendChild(controls);
 
     const mousehint = document.createElement('div');
@@ -457,6 +471,7 @@ constructor() {}
 
     this.missions.onComplete = (done, next) => {
       this.score += done.reward;
+      playSfx('coin');
       this.chaos = Math.min(100, this.chaos + 10);
       const p = this.cow.group.position;
       this.spawnParticles(p.x, p.y + 2, p.z, 20, 0xffcc32);
@@ -614,6 +629,8 @@ constructor() {}
       if (err) err.textContent = 'Senha incorreta!';
       return;
     }
+    resumeAudio();
+    playSfx('click');
     document.title = 'Cow Rampage 3D';
     (document.getElementById('pwInput') as HTMLInputElement | null)?.blur();
     document.getElementById('lockscreen')!.style.display = 'none';
@@ -746,6 +763,7 @@ constructor() {}
         }
         addOwned(id);
         setSelectedId(id);
+        playSfx('coin');
         this.applySelectedSkin();
         this.renderSkins();
       });
@@ -754,6 +772,7 @@ constructor() {}
       b.addEventListener('click', (e) => {
         e.stopPropagation();
         setSelectedId((b as HTMLElement).dataset['sel'] ?? 'comum');
+        playSfx('click');
         this.applySelectedSkin();
         this.renderSkins();
       });
@@ -882,6 +901,7 @@ constructor() {}
       this.net.onEvent = (e, fromName) => {
         if (e.type === 'boom') {
           this.spawnParticles(e.x, e.y, e.z, 12, 0xff6600);
+          playSfx('boom');
           this.showMessage(fromName + ': ' + e.text);
         } else if (e.type === 'hit') {
           // cabeçada PvP: só aplica se fui o alvo e estou perto do golpe
@@ -904,6 +924,8 @@ constructor() {}
       };
     }
     this.input.requestLock();
+    resumeAudio();
+    playSfx('moo');
     this.showMessage('BOA SORTE!');
   }
 
@@ -1128,6 +1150,7 @@ constructor() {}
           this.net.sendBoom('BOOOM!', nt.x, nt.y, nt.z);
         }
         this.score += 15;
+        playSfx('boom');
         this.chaos = Math.min(100, this.chaos + 25);
         this.showMessage('BOOOM!');
         this.spawnParticles(npc.body.translation().x, npc.body.translation().y, npc.body.translation().z, 15, 0xff6600);
@@ -1197,6 +1220,7 @@ constructor() {}
   }
 
   private setGadget(g: 'sela' | 'jetpack' | 'biblia') {
+    if (this.gadget !== g) playSfx('click');
     this.gadget = g;
     try {
       window.localStorage.setItem('cowrampage.gadget', g);
@@ -1231,6 +1255,7 @@ constructor() {}
         n.stateTimer = 5;
         const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(170);
         n.body.applyImpulse({ x: push.x, y: 120, z: push.z }, true);
+        playSfx('thud');
         this.score += 3;
         this.chaos = Math.min(100, this.chaos + 5);
         this.missions.event('headbutt');
@@ -1327,10 +1352,11 @@ constructor() {}
     // nado: SÓ BOIA — a física de água só age quando a vaca está NA água
     // (perto da linha). Voando/pulando por cima, é física normal de ar.
     if (inWater && t.y <= 1.6) {
-      if (!this.wasSwimming) {
-        // entrou na água: só um splash (sem travar/sugar nada)
-        this.wasSwimming = true;
-        this.spawnParticles(t.x, 0.2, t.z, 12, 0x3a8fcf);
+        if (!this.wasSwimming) {
+          // entrou na água: só um splash (sem travar/sugar nada)
+          this.wasSwimming = true;
+          playSfx('splash');
+          this.spawnParticles(t.x, 0.2, t.z, 12, 0x3a8fcf);
         this.input.rumble(0.4, 0.3, 150);
       }
       const cw = body.translation();
@@ -1380,15 +1406,17 @@ constructor() {}
     }
     const jump = !thrusting && this.input.consumeOnce('Space');
     if (jump) {
-      if (inWater) {
-        // pulo de verdade na água: dá pra saltar pra fora
-        const v = body.linvel();
-        body.setLinvel({ x: v.x + fwd.x * 3, y: 9, z: v.z + fwd.z * 3 }, true);
-        this.cow.resetJumps();
-        this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
-      } else if (this.cow.jumpCount < this.cow.maxJumps) {
-        this.cow.applyJump(running ? 10 : 8.5);
-        this.cow.jumpCount++;
+        if (inWater) {
+          // pulo de verdade na água: dá pra saltar pra fora
+          const v = body.linvel();
+          body.setLinvel({ x: v.x + fwd.x * 3, y: 9, z: v.z + fwd.z * 3 }, true);
+          this.cow.resetJumps();
+          playSfx('splash');
+          this.spawnParticles(t.x, 0.3, t.z, 6, 0x3a8fcf);
+        } else if (this.cow.jumpCount < this.cow.maxJumps) {
+          this.cow.applyJump(running ? 10 : 8.5);
+          playSfx('jump');
+          this.cow.jumpCount++;
         this.spawnParticles(this.cow.group.position.x, 0.1, this.cow.group.position.z, 4, 0xffffff);
       }
     }
@@ -1405,10 +1433,11 @@ constructor() {}
       // guarda a maior velocidade de queda pra medir o tombo no pouso
       this.fallV = Math.max(this.fallV, -currentVel.y);
     } else {
-      if (!wasGrounded && this.fallV > 16) {
-        // caiu de MUITO alto: tomba de barriga pra cima
-        this.cow.startBellyUp();
-        this.spawnParticles(t.x, t.y - 1.4, t.z, 18, 0xd9c27a);
+        if (!wasGrounded && this.fallV > 16) {
+          // caiu de MUITO alto: tomba de barriga pra cima
+          this.cow.startBellyUp();
+          playSfx('flop');
+          this.spawnParticles(t.x, t.y - 1.4, t.z, 18, 0xd9c27a);
         this.input.rumble(1, 0.9, 400);
         if (this.carrying) this.dropCarried();
       }
@@ -1626,6 +1655,7 @@ constructor() {}
         y: 8,
         z: dirZ * 9 + v.z * 0.4,
       }, true);
+      playSfx('clang');
       // só é arremessada pra frente (sem mortal/loop)
       this.spawnParticles(m.position.x, 1.4, m.position.z, 12, 0xffdd55);
       this.input.rumble(1, 0.8, 300);
@@ -1820,6 +1850,7 @@ constructor() {}
     if (this.input.consumeOnce('Digit1')) this.setGadget('sela');
     if (this.input.consumeOnce('Digit2')) this.setGadget('jetpack');
     if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
+    if (this.input.consumeOnce('KeyM')) this.toggleSound();
 
     this.updateCow(dt);
     this.updateCars(dt);

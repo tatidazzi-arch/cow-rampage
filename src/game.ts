@@ -1174,6 +1174,7 @@ constructor() {}
     if (best) {
       this.carrying = best;
       this.setNPCState(best, 'carried');
+      this.npcFactory.complain(best, 'PUT ME DOWN!!');
       this.showMessage('Pegou! E no canhao!');
     }
   }
@@ -1253,6 +1254,7 @@ constructor() {}
       if (d < 5) {
         this.setNPCState(n, 'stunned');
         n.stateTimer = 5;
+        this.npcFactory.complain(n);
         const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(170);
         n.body.applyImpulse({ x: push.x, y: 120, z: push.z }, true);
         playSfx('thud');
@@ -1587,6 +1589,7 @@ constructor() {}
       const d = Math.hypot(t.x - cx, t.z - cz);
       if (d < 2.4 && this.carrying !== n && !n.vendor && n.state === 'walk') {
         this.setNPCState(n, 'stunned');
+        this.npcFactory.complain(n);
         n.stateTimer = 3;
         n.body.setLinvel({ x: (t.x - cx) * 3, y: 3, z: (t.z - cz) * 3 }, true);
         this.score += 2;
@@ -1594,6 +1597,7 @@ constructor() {}
         this.missions.event('knock');
       }
       this.npcFactory.syncMesh(n);
+      this.npcFactory.tickSay(n, dt);
       // afogado (ex.: lançado pelo canhão na água): volta pra ilha principal
       // (levitando nunca afoga)
       if (t.y < 0.5 && n.state !== 'carried' && n.state !== 'inCannon' && n.state !== 'levitate'

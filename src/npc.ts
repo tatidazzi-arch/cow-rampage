@@ -4,7 +4,7 @@ import { worldRand } from './rng';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { speakComplaint } from './sound';
+import { playSfx, speakComplaint } from './sound';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
 
@@ -478,6 +478,12 @@ export class NPCFactory {
    *  de 1 fala por vez (senão 350 NPCs viram coral). */
   complain(npc: NPCPhysics, line?: string): void {
     if (npc.sayT > 0) return;
+    // bode não fala inglês: bale
+    if (npc.kind === 'goat') {
+      playSfx('baa');
+      npc.sayT = 4;
+      return;
+    }
     let text = line;
     if (!text) {
       const last = npc.mesh.userData['sayLast'] as string | undefined;

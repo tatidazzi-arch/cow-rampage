@@ -3,7 +3,7 @@
 
 export type SfxName =
   | 'click' | 'jump' | 'thud' | 'boom' | 'splash'
-  | 'coin' | 'moo' | 'clang' | 'flop';
+  | 'coin' | 'moo' | 'baa' | 'clang' | 'flop';
 
 const MUTE_KEY = 'cowrampage.muted';
 
@@ -100,6 +100,54 @@ export function toggleMute(): boolean {
  *  sem fila: se já tem alguém falando, ignora (evita spam com 350 NPCs).
  *  Emoção pela pontuação e palavras: grito (!!!!), medo (PUT ME DOWN/CANNON),
  *  indignação (?) — cada uma com ritmo/tom/voz próprios. */
+/** Balido de bode: agudo com tremolo (o "bé-é-é"). */
+function baa(): void {
+  const c = ac();
+  if (!c || !master || muted) return;
+  try {
+    const t0 = c.currentTime;
+    const osc = c.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(540, t0);
+    osc.frequency.exponentialRampToValueAtTime(370, t0 + 0.45);
+    // vibrato rápido no tom
+    const vib = c.createOscillator();
+    vib.type = 'sine';
+    vib.frequency.value = 7;
+    const vibG = c.createGain();
+    vibG.gain.value = 22;
+    vib.connect(vibG);
+    vibG.connect(osc.frequency);
+    // tremolo no volume (o gaguejado do "bé-é-é")
+    const trem = c.createOscillator();
+    trem.type = 'sine';
+    trem.frequency.value = 11;
+    const tremG = c.createGain();
+    tremG.gain.value = 0.22;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.5, t0);
+    trem.connect(tremG);
+    tremG.connect(g.gain);
+    const flt = c.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.frequency.value = 1500;
+    flt.Q.value = 1;
+    const out = c.createGain();
+    out.gain.setValueAtTime(0.5, t0);
+    out.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    osc.connect(flt);
+    flt.connect(g);
+    g.connect(out);
+    out.connect(master);
+    osc.start(t0);
+    vib.start(t0);
+    trem.start(t0);
+    osc.stop(t0 + 0.55);
+    vib.stop(t0 + 0.55);
+    trem.stop(t0 + 0.55);
+  } catch { /* nunca quebra o jogo */ }
+}
+
 export function speakComplaint(text: string): void {
   if (muted) return;
   try {
@@ -247,6 +295,9 @@ export function playSfx(name: SfxName): void {
       break;
     case 'moo':
       moo();
+      break;
+    case 'baa':
+      baa();
       break;
     case 'clang':
       tone({ f: 220, t: 'square', d: 0.25, v: 0.25 });

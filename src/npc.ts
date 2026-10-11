@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { worldRand } from './rng';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { speakComplaint } from './sound';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
@@ -49,19 +48,11 @@ export function isSweater(npc: NPCPhysics): boolean {
 export class NPCFactory {
   private idCounter = 1;
 
-  // Modelo "business" (FBX): template clonado para 1/4 dos NPCs
-  private businessTemplate: THREE.Group | null = null;
-  private businessLoading: Promise<void> | null = null;
-  readonly businessInfo = { loaded: false, facing: '?', postFacing: '?' };
-
-  // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
-  private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
-  private static sharedSuitMat: THREE.MeshStandardMaterial | null = null;
-  private static sharedHairMat: THREE.MeshLambertMaterial | null = null;
-  private static mergedSuitGeo: THREE.BufferGeometry | null = null;
-  private static mergedWigGeo: THREE.BufferGeometry | null = null;
-  private static mergedWigPos = new THREE.Vector3();
-  private static mergedWigScaleY = 0.85;
+  // Caçador (bounty.glb): 1 geometria + 4 tintas compartilhadas (sem cabelo, sem terno)
+  private static bountyGeo: THREE.BufferGeometry | null = null;
+  private static bountyMats: THREE.Material[] = [];
+  private static bountyLoading: Promise<void> | null = null;
+  private static fallbackMat: THREE.MeshLambertMaterial | null = null;
 
   create(scene: THREE.Scene, world: RAPIER.World, x: number, z: number, forceKind?: 'normal' | 'business' | 'goat'): NPCPhysics {
     const id = this.idCounter++;
@@ -73,8 +64,8 @@ export class NPCFactory {
     const pants = new THREE.Color(PANT_COLORS[Math.floor(worldRand() * PANT_COLORS.length)]);
 
     const npcKind = forceKind ?? (id % 4 === 1 ? 'business' : 'normal');
-    const mesh = npcKind === 'goat' ? this.buildGoatMesh() : this.buildMesh(shirt, skin, hair, pants);
-    this.mergeProcedural(mesh);
+    // humanos = caçador (sem cabelo); bode continua bode
+    const mesh = npcKind === 'goat' ? this.buildGoatMesh() : this.buildBountyMesh();
     mesh.position.set(x, 0, z);
     scene.add(mesh);
 
@@ -114,246 +105,75 @@ export class NPCFactory {
       sayT: 0,
       skinSeat: { shirt, skin, hair, pants },
     };
-    if (npc.kind === 'business') this.ensureBusiness(npc);
     return npc;
   }
 
-  /** Funde as partes procedurais em 1 mesh (cor por vértice, 1 material global). */
-  private mergeProcedural(group: THREE.Group): void {
-    if (!NPCFactory.sharedVertexMat) {
-      NPCFactory.sharedVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    }
-    group.updateMatrixWorld(true);
-    const geos: THREE.BufferGeometry[] = [];
-    group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      const mat = m.material as THREE.MeshLambertMaterial | undefined;
-      const color = mat && mat.color ? mat.color as THREE.Color : new THREE.Color(0xffffff);
-      const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
-      const pos = g.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (!pos) return;
-      const arr = new Float32Array(pos.count * 3);
-      for (let i = 0; i < pos.count; i++) {
-        arr[i * 3] = color.r;
-        arr[i * 3 + 1] = color.g;
-        arr[i * 3 + 2] = color.b;
-      }
-      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-      geos.push(g);
-    });
-    for (const child of [...group.children]) group.remove(child);
-    if (geos.length === 0) return;
-    const merged = mergeGeometries(geos, false);
-    if (!merged) {
-      console.warn('mergeProcedural falhou, mantendo partes');
+  /** Pré-carrega o caçador (chamar antes de criar NPCs). */
+  async preload(): Promise<void> {
+    if (NPCFactory.bountyGeo || NPCFactory.bountyLoading) {
+      if (NPCFactory.bountyLoading) await NPCFactory.bountyLoading;
       return;
     }
-    const mesh = new THREE.Mesh(merged, NPCFactory.sharedVertexMat);
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    group.add(mesh);
+    NPCFactory.bountyLoading = this.loadBounty().catch((err) => {
+      console.warn('Modelo bounty nao carregou, usando fallback:', err);
+    });
+    await NPCFactory.bountyLoading;
   }
-  private ensureBusiness(npc: NPCPhysics): void {
-    if (this.businessTemplate) {
-      this.applyBusiness(npc);
-      return;
-    }
-    if (!this.businessLoading) {
-      this.businessLoading = this.loadBusiness().catch((err) => {
-        console.warn('Modelo business nao carregou, usando procedural:', err);
+
+  private async loadBounty(): Promise<void> {
+    const gltf = await new GLTFLoader().loadAsync('models/npc/bounty.glb');
+    const parts: { geo: THREE.BufferGeometry; mat: THREE.Material }[] = [];
+    gltf.scene.updateMatrixWorld(true);
+    gltf.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || parts.length > 0) return; // 1 mesh só
+      const mm = Array.isArray(m.material) ? m.material[0] : m.material;
+      parts.push({
+        geo: m.geometry.clone().applyMatrix4(m.matrixWorld),
+        mat: mm ?? new THREE.MeshStandardMaterial({ color: 0x222222 }),
       });
-    }
-    void this.businessLoading.then(() => this.applyBusiness(npc));
+    });
+    if (parts.length === 0) return;
+    const geo = parts[0]!.geo;
+    const baseMat = parts[0]!.mat;
+    // normaliza: altura 2.15, pés em -0.14, centrado (frente +Z, igual ao terno)
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox!;
+    const s = (bb.max.y - bb.min.y) > 0 ? 2.15 / (bb.max.y - bb.min.y) : 1;
+    geo.scale(s, s, s);
+    geo.computeBoundingBox();
+    const b2 = geo.boundingBox!;
+    geo.translate(-(b2.min.x + b2.max.x) / 2, -0.14 - b2.min.y, -(b2.min.z + b2.max.z) / 2);
+    NPCFactory.bountyGeo = geo;
+    const mat = baseMat as THREE.Material;
+    // 4 tintas compartilhadas (preto original + coloridos escuros)
+    NPCFactory.bountyMats = [0xffffff, 0xff8888, 0x88aaff, 0x88ff88].map((tint) => {
+      const c = mat.clone();
+      const std = c as THREE.MeshStandardMaterial;
+      if (std.color) std.color.setHex(tint);
+      return c;
+    });
   }
 
-  private async loadBusiness(): Promise<void> {
-    // OBJ (o FBX do pack e versao 6.1, que o Three nao le) + texturas do proprio pack
-    const loader = new OBJLoader();
-    const model = await loader.loadAsync('models/npc/Humano_01Business_01_30K.obj');
-
-    const texLoader = new THREE.TextureLoader();
-    const map = await texLoader.loadAsync('models/npc/Humano_01Business_01_Diffuse01.jpg');
-    map.colorSpace = THREE.SRGBColorSpace;
-    const normalMap = await texLoader.loadAsync('models/npc/Humano_01Business_01_Normal.jpg');
-    const mat = new THREE.MeshStandardMaterial({
-      map,
-      normalMap,
-      roughness: 0.85,
-      metalness: 0.0,
-    });
-    NPCFactory.sharedSuitMat = mat;
-    model.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.material = mat;
-      }
-    });
-
-    // descobre a frente nativa (nariz = lado mais saliente na altura da cabeca)
-    const native = this.measureFacing(model);
-    this.businessInfo.facing = native;
-    const yawMap: Record<string, number> = {
-      '+Z': 0, '-Z': Math.PI, '+X': -Math.PI / 2, '-X': Math.PI / 2,
-    };
-    const inner = new THREE.Group();
-    inner.add(model);
-    inner.rotation.y = yawMap[native] ?? 0;
-    inner.updateMatrixWorld(true);
-
-    // normaliza: altura 2.15, pes em local -0.14 (igual ao procedural), centralizado
-    const box = new THREE.Box3().setFromObject(inner);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const s = size.y > 0 ? 2.15 / size.y : 1;
-    const wrap = new THREE.Group();
-    wrap.add(inner);
-    inner.scale.setScalar(s);
-    inner.position.set(-center.x * s, -0.14 - box.min.y * s, -center.z * s);
-
-    wrap.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      m.castShadow = true;
-      const mats = Array.isArray(m.material) ? m.material : [m.material];
-      for (const mat of mats) {
-        const std = mat as THREE.MeshStandardMaterial;
-        if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
-      }
-    });
-
-    wrap.updateMatrixWorld(true);
-    // peruca anti-calvície no terninho: mede o topo da cabeça e cobre
-    {
-      const v = new THREE.Vector3();
-      let cx = 0, cz = 0, n = 0, top = -Infinity;
-      wrap.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-        if (!pos) return;
-        for (let i = 0; i < pos.count; i++) {
-          v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-          if (v.y < 1.7) continue;
-          cx += v.x; cz += v.z; n++;
-          if (v.y > top) top = v.y;
-        }
-      });
-      if (n > 0) {
-        cx /= n; cz /= n;
-        let rr = 0.2;
-        wrap.traverse((o) => {
-          const m = o as THREE.Mesh;
-          if (!m.isMesh) return;
-          const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-          if (!pos) return;
-          for (let i = 0; i < pos.count; i++) {
-            v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-            if (v.y < 1.7) continue;
-            rr = Math.max(rr, Math.hypot(v.x - cx, v.z - cz));
-          }
-        });
-        const wigMat = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
-        NPCFactory.sharedHairMat = wigMat;
-        const wig = new THREE.Mesh(new THREE.SphereGeometry(rr * 1.25, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
-          wigMat);
-        wig.position.set(cx, top - rr * 0.5, cz);
-        wig.scale.y = 0.85;
-        wig.userData['isWig'] = true;
-        wrap.add(wig);
-      }
-    }
-    this.businessTemplate = wrap;
-    this.businessInfo.loaded = true;
-    this.businessInfo.postFacing = this.measureFacing(wrap);
-  }
-
-  /** Mede para onde o modelo olha: lado do nariz na altura da cabeca. */
-  private measureFacing(root: THREE.Object3D): string {
-    root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(root);
-    const size = box.getSize(new THREE.Vector3());
-    if (size.y <= 0) return '+Z';
-    const alongX = size.z > size.x * 1.15;
-    const headY = box.min.y + (box.max.y - box.min.y) * 0.82;
-    const v = new THREE.Vector3();
-    let min = Infinity, max = -Infinity, sum = 0, count = 0;
-    root.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (!pos) return;
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-        if (v.y < headY) continue;
-        const c = alongX ? v.x : v.z;
-        if (c < min) min = c;
-        if (c > max) max = c;
-        sum += c;
-        count++;
-      }
-    });
-    if (count === 0) return '+Z';
-    const c = sum / count;
-    const sign = max - c >= c - min ? '+' : '-';
-    return sign + (alongX ? 'X' : 'Z');
-  }
-
-  /** Troca o procedural pelo clone do business (mantem o Group = fisica/sync intactos). */
-  private applyBusiness(npc: NPCPhysics): void {
-    if (!this.businessTemplate || npc.kind !== 'business') return;
-    if (npc.mesh.userData['isBusiness']) return;
-    // terno fundido compartilhado (1 draw) + peruca compartilhada
-    if (!NPCFactory.mergedSuitGeo) this.buildMergedBusiness();
-    for (const child of [...npc.mesh.children]) {
-      npc.mesh.remove(child);
-    }
-    if (NPCFactory.mergedSuitGeo && NPCFactory.sharedSuitMat) {
-      const suit = new THREE.Mesh(NPCFactory.mergedSuitGeo, NPCFactory.sharedSuitMat);
-      suit.castShadow = false;
-      suit.receiveShadow = false;
-      npc.mesh.add(suit);
+  /** Humanoide = caçador (1 mesh, sem cabelo). Fallback = caixa escura sem cabelo. */
+  private buildBountyMesh(): THREE.Group {
+    const g = new THREE.Group();
+    const geo = NPCFactory.bountyGeo;
+    const mats = NPCFactory.bountyMats;
+    if (geo && mats.length > 0) {
+      const mesh = new THREE.Mesh(geo, mats[Math.floor(worldRand() * mats.length)]!);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      g.add(mesh);
     } else {
-      npc.mesh.add(this.businessTemplate.clone(true));
-    }
-    if (NPCFactory.mergedWigGeo && NPCFactory.sharedHairMat) {
-      const wig = new THREE.Mesh(NPCFactory.mergedWigGeo, NPCFactory.sharedHairMat);
-      wig.position.copy(NPCFactory.mergedWigPos);
-      wig.scale.y = NPCFactory.mergedWigScaleY;
-      npc.mesh.add(wig);
-    }
-    npc.mesh.userData['isBusiness'] = true;
-  }
-
-  /** Funde o terno uma vez (com UV/textura); peruca vira geometria compartilhada. */
-  private buildMergedBusiness(): void {
-    if (!this.businessTemplate) return;
-    this.businessTemplate.updateMatrixWorld(true);
-    const geos: THREE.BufferGeometry[] = [];
-    let wigGeo: THREE.BufferGeometry | null = null;
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const one = new THREE.Vector3(1, 1, 1);
-    const noScale = new THREE.Matrix4();
-    this.businessTemplate.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      if (m.userData['isWig']) {
-        if (!wigGeo) {
-          // geometria sem escala (o 0.85 vai no mesh de cada NPC)
-          pos.setFromMatrixPosition(m.matrixWorld);
-          quat.setFromRotationMatrix(m.matrixWorld);
-          noScale.compose(pos, quat, one);
-          wigGeo = m.geometry.clone().applyMatrix4(noScale);
-          NPCFactory.mergedWigPos.copy(pos);
-        }
-        return;
+      if (!NPCFactory.fallbackMat) {
+        NPCFactory.fallbackMat = new THREE.MeshLambertMaterial({ color: 0x222226 });
       }
-      geos.push(m.geometry.clone().applyMatrix4(m.matrixWorld));
-    });
-    const merged = geos.length > 0 ? mergeGeometries(geos, false) : null;
-    if (merged) NPCFactory.mergedSuitGeo = merged;
-    if (wigGeo) NPCFactory.mergedWigGeo = wigGeo;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.9, 0.35), NPCFactory.fallbackMat);
+      m.position.y = 0.81; // pés em -0.14
+      g.add(m);
+    }
+    return g;
   }
 
   /** Bode da cidade das cabras: pes em local -0.14, frente +Z (igual ao humanoide). */
@@ -404,99 +224,6 @@ export class NPCFactory {
     tail.position.set(0, 0.6, -0.62);
     tail.rotation.x = -0.5;
     g.add(tail);
-
-    return g;
-  }
-
-  private buildMesh(
-    shirt: THREE.Color,
-    skin: THREE.Color,
-    hair: THREE.Color,
-    pants: THREE.Color,
-  ): THREE.Group {
-    const g = new THREE.Group();
-
-    const shirtMat = new THREE.MeshLambertMaterial({ color: shirt });
-    const skinMat = new THREE.MeshLambertMaterial({ color: skin });
-    const pantsMat = new THREE.MeshLambertMaterial({ color: pants });
-    const hairMat = new THREE.MeshLambertMaterial({ color: hair });
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 12), skinMat);
-    head.position.y = 1.85;
-    head.castShadow = true;
-    g.add(head);
-
-    for (const s of [-0.12, 0.12]) {
-      const eyeW = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), new THREE.MeshLambertMaterial({ color: 0xffffff }));
-      eyeW.position.set(s, 1.91, 0.31);
-      g.add(eyeW);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshLambertMaterial({ color: 0x111111 }));
-      pupil.position.set(s, 1.91, 0.37);
-      g.add(pupil);
-    }
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.035, 0.02), new THREE.MeshLambertMaterial({ color: 0xb04a4a }));
-    mouth.position.set(0, 1.71, 0.33);
-    g.add(mouth);
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), skinMat);
-    nose.position.set(0, 1.79, 0.38);
-    g.add(nose);
-
-    // --- CABELO (grande e visível de longe!) ---
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.44, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat);
-    cap.position.y = 1.95;
-    cap.scale.set(1, 0.95, 1);
-    g.add(cap);
-    for (const s of [-0.28, 0.28]) {
-      const strand = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.75, 0.1), hairMat);
-      strand.position.set(s, 1.35, -0.2);
-      g.add(strand);
-    }
-    const fringe = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.18, 0.08), hairMat);
-    fringe.position.set(0, 2.0, 0.32);
-    g.add(fringe);
-
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.2, 8), skinMat);
-    neck.position.y = 1.55;
-    g.add(neck);
-
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.35), shirtMat);
-    body.position.y = 1.1;
-    body.castShadow = true;
-    g.add(body);
-
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.08, 0.37), new THREE.MeshLambertMaterial({ color: 0x3a2a1a }));
-    belt.position.y = 0.7;
-    g.add(belt);
-    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.04), new THREE.MeshLambertMaterial({ color: 0xccaa44 }));
-    buckle.position.set(0, 0.7, 0.2);
-    g.add(buckle);
-
-    const pantsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.55, 0.33), pantsMat);
-    pantsMesh.position.y = 0.38;
-    g.add(pantsMesh);
-
-    for (const s of [-0.38, 0.38]) {
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.14), shirtMat);
-      arm.position.set(s, 1.0, 0);
-      g.add(arm);
-      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 6, 6), skinMat);
-      hand.position.set(s, 0.65, 0);
-      g.add(hand);
-      const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.16), shirtMat);
-      sleeve.position.set(s, 1.35, 0);
-      g.add(sleeve);
-    }
-
-    g.userData.legs = [];
-    for (const s of [-0.14, 0.14]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.55, 0.16), pantsMat);
-      leg.position.set(s, 0.15, 0);
-      g.add(leg);
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.24), new THREE.MeshLambertMaterial({ color: 0x1a1a1a }));
-      shoe.position.set(s, -0.08, 0.03);
-      g.add(shoe);
-      g.userData.legs.push(leg);
-    }
 
     return g;
   }

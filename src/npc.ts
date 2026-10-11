@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { worldRand } from './rng';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { speakComplaint } from './sound';
 
 export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
@@ -11,7 +13,7 @@ export interface NPCPhysics {
   mesh: THREE.Group;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
-  kind: 'normal' | 'business' | 'goat';
+  kind: 'normal' | 'business' | 'zane' | 'goat';
   state: NPCState;
   stateTimer: number;
   walkDir: number;
@@ -53,8 +55,13 @@ export class NPCFactory {
   private static bountyMats: THREE.Material[] = [];
   private static bountyLoading: Promise<void> | null = null;
   private static fallbackMat: THREE.MeshLambertMaterial | null = null;
+  // Zane (zane.fbx): template com esqueleto, clonado por NPC (sem barba/pelos)
+  private static zaneTemplate: THREE.Group | null = null;
+  private static zaneLoading: Promise<void> | null = null;
+  // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
+  private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
 
-  create(scene: THREE.Scene, world: RAPIER.World, x: number, z: number, forceKind?: 'normal' | 'business' | 'goat'): NPCPhysics {
+  create(scene: THREE.Scene, world: RAPIER.World, x: number, z: number, forceKind?: 'normal' | 'business' | 'zane' | 'goat'): NPCPhysics {
     const id = this.idCounter++;
     const shirt = worldRand() < 0.35
       ? new THREE.Color(SUETER_HEX[Math.floor(worldRand() * SUETER_HEX.length)])
@@ -63,9 +70,12 @@ export class NPCFactory {
     const hair = new THREE.Color(HAIR_COLORS[Math.floor(worldRand() * HAIR_COLORS.length)]);
     const pants = new THREE.Color(PANT_COLORS[Math.floor(worldRand() * PANT_COLORS.length)]);
 
-    const npcKind = forceKind ?? (id % 4 === 1 ? 'business' : 'normal');
-    // humanos = caçador (sem cabelo); bode continua bode
-    const mesh = npcKind === 'goat' ? this.buildGoatMesh() : this.buildBountyMesh();
+    // ~20% detalhados (zane raro + caçador), 80% procedural colorido de antes
+    const npcKind = forceKind ?? (id % 34 === 1 ? 'zane' : id % 6 === 1 ? 'business' : 'normal');
+    const mesh = npcKind === 'goat' ? this.buildGoatMesh()
+      : npcKind === 'zane' ? this.buildZaneMesh()
+      : npcKind === 'business' ? this.buildBountyMesh()
+      : this.buildProceduralMesh(shirt, skin, hair, pants);
     mesh.position.set(x, 0, z);
     scene.add(mesh);
 
@@ -173,6 +183,224 @@ export class NPCFactory {
       m.position.y = 0.81; // pés em -0.14
       g.add(m);
     }
+    return g;
+  }
+
+  /** Procedural colorido de antes (80% dos NPCs, COM cabelo). */
+  private buildProceduralMesh(
+    shirt: THREE.Color,
+    skin: THREE.Color,
+    hair: THREE.Color,
+    pants: THREE.Color,
+  ): THREE.Group {
+    const mesh = this.buildMesh(shirt, skin, hair, pants);
+    this.mergeProcedural(mesh);
+    return mesh;
+  }
+
+  /** Funde as partes procedurais em 1 mesh (cor por vértice, 1 material global). */
+  private mergeProcedural(group: THREE.Group): void {
+    if (!NPCFactory.sharedVertexMat) {
+      NPCFactory.sharedVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    }
+    group.updateMatrixWorld(true);
+    const geos: THREE.BufferGeometry[] = [];
+    group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mat = m.material as THREE.MeshLambertMaterial | undefined;
+      const color = mat && mat.color ? mat.color as THREE.Color : new THREE.Color(0xffffff);
+      const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+      const pos = g.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const arr = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        arr[i * 3] = color.r;
+        arr[i * 3 + 1] = color.g;
+        arr[i * 3 + 2] = color.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      geos.push(g);
+    });
+    for (const child of [...group.children]) group.remove(child);
+    if (geos.length === 0) return;
+    const merged = mergeGeometries(geos, false);
+    if (!merged) {
+      console.warn('mergeProcedural falhou, mantendo partes');
+      return;
+    }
+    const mesh = new THREE.Mesh(merged, NPCFactory.sharedVertexMat);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    group.add(mesh);
+  }
+
+  private buildMesh(
+    shirt: THREE.Color,
+    skin: THREE.Color,
+    hair: THREE.Color,
+    pants: THREE.Color,
+  ): THREE.Group {
+    const g = new THREE.Group();
+
+    const shirtMat = new THREE.MeshLambertMaterial({ color: shirt });
+    const skinMat = new THREE.MeshLambertMaterial({ color: skin });
+    const pantsMat = new THREE.MeshLambertMaterial({ color: pants });
+    const hairMat = new THREE.MeshLambertMaterial({ color: hair });
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 12), skinMat);
+    head.position.y = 1.85;
+    head.castShadow = true;
+    g.add(head);
+
+    for (const s of [-0.12, 0.12]) {
+      const eyeW = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), new THREE.MeshLambertMaterial({ color: 0xffffff }));
+      eyeW.position.set(s, 1.91, 0.31);
+      g.add(eyeW);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshLambertMaterial({ color: 0x111111 }));
+      pupil.position.set(s, 1.91, 0.37);
+      g.add(pupil);
+    }
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.035, 0.02), new THREE.MeshLambertMaterial({ color: 0xb04a4a }));
+    mouth.position.set(0, 1.71, 0.33);
+    g.add(mouth);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), skinMat);
+    nose.position.set(0, 1.79, 0.38);
+    g.add(nose);
+
+    // --- CABELO (grande e visível de longe!) ---
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.44, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat);
+    cap.position.y = 1.95;
+    cap.scale.set(1, 0.95, 1);
+    g.add(cap);
+    for (const s of [-0.28, 0.28]) {
+      const strand = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.75, 0.1), hairMat);
+      strand.position.set(s, 1.35, -0.2);
+      g.add(strand);
+    }
+    const fringe = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.18, 0.08), hairMat);
+    fringe.position.set(0, 2.0, 0.32);
+    g.add(fringe);
+
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.2, 8), skinMat);
+    neck.position.y = 1.55;
+    g.add(neck);
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.35), shirtMat);
+    body.position.y = 1.1;
+    body.castShadow = true;
+    g.add(body);
+
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.08, 0.37), new THREE.MeshLambertMaterial({ color: 0x3a2a1a }));
+    belt.position.y = 0.7;
+    g.add(belt);
+    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.04), new THREE.MeshLambertMaterial({ color: 0xccaa44 }));
+    buckle.position.set(0, 0.7, 0.2);
+    g.add(buckle);
+
+    const pantsMesh = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.55, 0.33), pantsMat);
+    pantsMesh.position.y = 0.38;
+    g.add(pantsMesh);
+
+    for (const s of [-0.38, 0.38]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.14), shirtMat);
+      arm.position.set(s, 1.0, 0);
+      g.add(arm);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 6, 6), skinMat);
+      hand.position.set(s, 0.65, 0);
+      g.add(hand);
+      const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.16), shirtMat);
+      sleeve.position.set(s, 1.35, 0);
+      g.add(sleeve);
+    }
+
+    g.userData.legs = [];
+    for (const s of [-0.14, 0.14]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.55, 0.16), pantsMat);
+      leg.position.set(s, 0.15, 0);
+      g.add(leg);
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.24), new THREE.MeshLambertMaterial({ color: 0x1a1a1a }));
+      shoe.position.set(s, -0.08, 0.03);
+      g.add(shoe);
+      g.userData.legs.push(leg);
+    }
+
+    return g;
+  }
+
+  /** Pré-carrega o Zane (chamar antes de criar NPCs, junto do preload). */
+  async preloadZane(): Promise<void> {
+    if (NPCFactory.zaneTemplate || NPCFactory.zaneLoading) {
+      if (NPCFactory.zaneLoading) await NPCFactory.zaneLoading;
+      return;
+    }
+    NPCFactory.zaneLoading = this.loadZane().catch((err) => {
+      console.warn('Modelo zane nao carregou, usando fallback:', err);
+    });
+    await NPCFactory.zaneLoading;
+  }
+
+  /** Zane sem barba/pelos (fora Male_Bushy, Stubble_Neck) e sem língua/dentes
+   *  (invisíveis). Mantém SkinnedMesh + esqueleto (as roupas precisam dos ossos);
+   *  como nunca anima, cada clone só herda a pose de descanso. (GLB já dizimado.) */
+  private async loadZane(): Promise<void> {
+    const SKIP = new Set(['Male_Bushy', 'Stubble_Neck', 'CC_Base_Tongue', 'CC_Base_Teeth']);
+    const gltf = await new GLTFLoader().loadAsync('models/npc/zane.glb');
+    const model = gltf.scene;
+    const kill: THREE.Object3D[] = [];
+    model.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && SKIP.has(o.name)) kill.push(o);
+    });
+    for (const k of kill) k.parent?.remove(k);
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh && !(o as THREE.SkinnedMesh).isSkinnedMesh) return;
+      // (GLB já vem dizimado do conversor; aqui só ajusta flags)
+      m.castShadow = false;
+      m.receiveShadow = false;
+      m.frustumCulled = false;
+    });
+    // normaliza via wrapper (ossos intactos): altura 2.15, pés -0.14, centrado.
+    // (bbox do FBX é instável, então mede por amostragem de vértices)
+    model.updateMatrixWorld(true);
+    let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const me = m.matrixWorld.elements;
+      for (let i = 0; i < pos.count; i += 8) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
+        const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
+        const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+        if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
+      }
+    });
+    const h = maxY - minY;
+    const s = h > 0 ? 2.15 / h : 1;
+    const wrap = new THREE.Group();
+    wrap.add(model);
+    wrap.scale.setScalar(s);
+    wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
+    wrap.updateMatrixWorld(true);
+    NPCFactory.zaneTemplate = wrap;
+  }
+
+  /** Zane (clone com esqueleto próprio, sem cabelo). Fallback = caixa escura. */
+  private buildZaneMesh(): THREE.Group {
+    const tpl = NPCFactory.zaneTemplate;
+    if (tpl) return cloneSkinned(tpl) as THREE.Group;
+    const g = new THREE.Group();
+    if (!NPCFactory.fallbackMat) {
+      NPCFactory.fallbackMat = new THREE.MeshLambertMaterial({ color: 0x222226 });
+    }
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.9, 0.35), NPCFactory.fallbackMat);
+    m.position.y = 0.81;
+    g.add(m);
     return g;
   }
 

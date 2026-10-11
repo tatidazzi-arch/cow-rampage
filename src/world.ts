@@ -1292,6 +1292,7 @@ const towerBox = new THREE.Box3();
     this.buildMine();
     this.buildSigns();
     this.buildTraffic();
+    this.buildLampPosts();
     this.buildCampfire();
   }
 
@@ -1365,6 +1366,125 @@ const towerBox = new THREE.Box3();
     }
     this.logProp('traffic', 0, 0);
     void this.loadCarModel();
+  }
+
+  /** Postes da avenida (streetlamp.fbx): 1 mesh fundido, clones nas calçadas. */
+  private lampTemplate: THREE.Mesh | null = null;
+  private lampHead = new THREE.Vector2(1, 0); // direção do braço no espaço do modelo (x, z)
+  private lampLoading: Promise<void> | null = null;
+
+  private buildLampPosts() {
+    // posições primeiro (síncrono, determinístico): zigue-zague nas calçadas (x/z ±8.6)
+    type Spot = { x: number; z: number; tx: number; tz: number };
+    const spots: Spot[] = [];
+    let side = 1;
+    for (let z = -1040; z <= 1140; z += 90, side *= -1) {
+      const x = side * 8.6;
+      if (this.isOnIsland(x, z, 2)) spots.push({ x, z, tx: -Math.sign(x), tz: 0 });
+    }
+    side = 1;
+    for (let x = -1360; x <= 1140; x += 90, side *= -1) {
+      const z = side * 8.6;
+      if (this.isOnIsland(x, z, 2)) spots.push({ x, z, tx: 0, tz: -Math.sign(z) });
+    }
+    // fora dos canhões
+    const clear = spots.filter((p) => !this.cannons.some((c) => Math.hypot(c.x - p.x, c.z - p.z) < 3));
+    void this.placeLamps(clear);
+  }
+
+  private lampColor(name: string): THREE.Color {
+    const nm = (name || '').toLowerCase();
+    if (nm.includes('glass')) return new THREE.Color(0xffe2a8);
+    if (nm.includes('concrete')) return new THREE.Color(0xa8a49c);
+    if (nm.includes('steel')) return new THREE.Color(0x3d3a35);
+    if (nm.includes('knob')) return new THREE.Color(0x151515);
+    if (nm.includes('material')) return new THREE.Color(0x4c3726);
+    return new THREE.Color(0x888888);
+  }
+
+  private async placeLamps(spots: { x: number; z: number; tx: number; tz: number }[]): Promise<void> {
+    if (this.lampTemplate || this.lampLoading) {
+      if (this.lampLoading) await this.lampLoading;
+    } else {
+      this.lampLoading = this.loadLampTemplate().catch((err) => {
+        console.warn('Modelo do poste nao carregou:', err);
+      });
+      await this.lampLoading;
+    }
+    if (!this.lampTemplate) return;
+    for (const p of spots) {
+      const gy = this.groundHeight(p.x, p.z);
+      const yaw = Math.atan2(p.tx, p.tz) - Math.atan2(this.lampHead.x, this.lampHead.y);
+      const lamp = this.lampTemplate.clone();
+      lamp.position.set(p.x, gy, p.z);
+      lamp.rotation.y = yaw;
+      this.scene.add(lamp);
+      const body = this.fixedBody(p.x, p.z);
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cylinder(5, 0.18).setTranslation(0, gy + 5, 0), body);
+      this.logProp('lamp', p.x, p.z);
+    }
+  }
+
+  /** Carrega o poste, pinta por nome de material, funde em 1 mesh de ~10m. */
+  private async loadLampTemplate(): Promise<void> {
+    const model = await new FBXLoader().loadAsync('models/lamp/streetlamp.fbx');
+    model.updateMatrixWorld(true);
+    const geos: THREE.BufferGeometry[] = [];
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+      const c = this.lampColor((mat as THREE.Material)?.name);
+      const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+      if (!g.index) {
+        const n = g.getAttribute('position').count;
+        const idx = new Uint32Array(n);
+        for (let i = 0; i < n; i++) idx[i] = i;
+        g.setIndex(new THREE.BufferAttribute(idx, 1));
+      }
+      const pos = g.getAttribute('position') as THREE.BufferAttribute;
+      const carr = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        carr[i * 3] = c.r;
+        carr[i * 3 + 1] = c.g;
+        carr[i * 3 + 2] = c.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(carr, 3));
+      for (const name of Object.keys(g.attributes)) {
+        if (name !== 'position' && name !== 'normal' && name !== 'color') g.deleteAttribute(name);
+      }
+      if (!g.getAttribute('normal')) g.computeVertexNormals();
+      geos.push(g);
+    });
+    const merged = geos.length > 0 ? mergeGeometries(geos, false) : null;
+    if (!merged) return;
+    // normaliza: 10m de altura, centrado, base em y=0
+    merged.computeBoundingBox();
+    const bb = merged.boundingBox!;
+    const size = bb.getSize(new THREE.Vector3());
+    const s = size.y > 0 ? 10 / size.y : 1;
+    merged.scale(s, s, s);
+    merged.computeBoundingBox();
+    const b2 = merged.boundingBox!;
+    merged.translate(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -(b2.min.z + b2.max.z) / 2);
+    // direção do braço: centroide do topo menos o da base
+    const pos = merged.getAttribute('position') as THREE.BufferAttribute;
+    let tx = 0, tz = 0, tn = 0, bx = 0, bz = 0, bn = 0;
+    const yTop = 10 * 0.85, yBot = 10 * 0.15;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      if (y > yTop) { tx += pos.getX(i); tz += pos.getZ(i); tn++; }
+      else if (y < yBot) { bx += pos.getX(i); bz += pos.getZ(i); bn++; }
+    }
+    const dx = tx / Math.max(1, tn) - bx / Math.max(1, bn);
+    const dz = tz / Math.max(1, tn) - bz / Math.max(1, bn);
+    const len = Math.hypot(dx, dz) || 1;
+    this.lampHead.set(dx / len, dz / len);
+    const mesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    mesh.castShadow = true;
+    this.lampTemplate = mesh;
+    console.log(`[lamp] poste carregado: ${pos.count} verts, braço=(${this.lampHead.x.toFixed(2)},${this.lampHead.y.toFixed(2)})`);
   }
 
   /** Carrega o R8, funde as 168 partes em 1 geometria (cor por vértice) e troca

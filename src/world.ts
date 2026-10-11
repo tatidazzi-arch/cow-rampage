@@ -644,18 +644,15 @@ const towerBox = new THREE.Box3();
     }
   }
 
-  /** Térreo (0-6m) em grade de 1m: cada célula com parede vira uma caixa
-   *  (fundidas por linha); portas e lobbies ficam livres. Se for maciço ou
-   *  vazio, cai pra 1 caixa sólida (seguro). Retorna um collider qualquer. */
+  /** Térreo em 1 caixa JUSTA (sem emendas pra enroscar): mede só o que está na
+   *  altura da vaca (0-4.5m; beiral/copa de cima não entram). Sem parede invisível
+   *  e sem buraco. Portas ficam fechadas (entrar prendia a vaca lá dentro). */
   private buildGroundCells(
     g: THREE.Group, bx: number, bz: number,
     halfW: number, halfD: number, body: RAPIER.RigidBody,
   ): RAPIER.Collider {
     g.updateMatrixWorld(true);
-    const cell = 1.0;
-    const nx = Math.max(1, Math.ceil((halfW * 2) / cell));
-    const nz = Math.max(1, Math.ceil((halfD * 2) / cell));
-    const maxY = new Float32Array(nx * nz).fill(-1e9);
+    let minX = 1e9, minZ = 1e9, maxX = -1e9, maxZ = -1e9;
     g.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
@@ -667,56 +664,18 @@ const towerBox = new THREE.Box3();
         const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
         const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
         const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
-        if (wy < 0 || wy > 6) continue;
-        const ix = Math.floor((wx - (bx - halfW)) / cell);
-        const iz = Math.floor((wz - (bz - halfD)) / cell);
-        if (ix < 0 || ix >= nx || iz < 0 || iz >= nz) continue;
-        const k = iz * nx + ix;
-        if (wy > maxY[k]!) maxY[k] = wy;
+        if (wy < 0 || wy > 4.5) continue;
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
       }
     });
-    let occ = 0;
-    for (let k = 0; k < nx * nz; k++) if (maxY[k]! > 0.4) occ++;
-    const total = nx * nz;
-    // maciço ou vazio: 1 caixa sólida (usa a pegada máxima do térreo)
-    if (occ < 3 || occ > total * 0.6) {
-      let hw = 0.5, hd = 0.5;
-      for (let iz = 0; iz < nz; iz++) {
-        for (let ix = 0; ix < nx; ix++) {
-          if (maxY[iz * nx + ix]! <= 0.4) continue;
-          const cx = bx - halfW + (ix + 0.5) * cell;
-          const cz = bz - halfD + (iz + 0.5) * cell;
-          hw = Math.max(hw, Math.abs(cx - bx) + cell / 2);
-          hd = Math.max(hd, Math.abs(cz - bz) + cell / 2);
-        }
-      }
-      if (occ < 3) { hw = halfW; hd = halfD; }
-      return this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(hw, 3, hd).setTranslation(0, 3, 0), body);
+    let hw = (maxX - minX) / 2, hd = (maxZ - minZ) / 2;
+    let cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+    if (!(hw > 0.5) || !(hd > 0.5)) {
+      hw = halfW; hd = halfD; cx = bx; cz = bz;
     }
-    // funde por linha
-    let first!: RAPIER.Collider;
-    for (let iz = 0; iz < nz; iz++) {
-      let ix = 0;
-      while (ix < nx) {
-        while (ix < nx && !(maxY[iz * nx + ix]! > 0.4)) ix++;
-        if (ix >= nx) break;
-        const x0 = ix;
-        let h = 0;
-        while (ix < nx && maxY[iz * nx + ix]! > 0.4) {
-          h = Math.max(h, Math.min(maxY[iz * nx + ix]!, 6));
-          ix++;
-        }
-        const cx = bx - halfW + ((x0 + ix) / 2) * cell;
-        const cz = bz - halfD + (iz + 0.5) * cell;
-        const w = (ix - x0) * cell;
-        const c = this.world.createCollider(
-          RAPIER.ColliderDesc.cuboid(w / 2, h / 2, cell / 2)
-            .setTranslation(cx - bx, h / 2, cz - bz), body);
-        if (!first) first = c;
-      }
-    }
-    return first!;
+    return this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(hw, 3, hd).setTranslation(cx - bx, 3, cz - bz), body);
   }
 
   /** Prédio de modelo: escala pra altura sorteada, collider box na medida. */

@@ -38,12 +38,18 @@ function ac(): AudioContext | null {
 export function resumeAudio(): void {
   ac();
   ensureSplash();
+  ensurePunch();
 }
 
 /** Splash de verdade (mp3 do pack do usuário). Carrega 1x; se falhar, usa o sintetizado. */
 let splashBuf: AudioBuffer | null = null;
 let splashLoading: Promise<void> | null = null;
 let lastSplashAt = 0;
+
+/** Soco de verdade (mp3 do pack do usuário) pra cabeçada. Mesmo esquema. */
+let punchBuf: AudioBuffer | null = null;
+let punchLoading: Promise<void> | null = null;
+let lastPunchAt = 0;
 
 function ensureSplash(): void {
   if (splashBuf || splashLoading) return;
@@ -61,6 +67,44 @@ function ensureSplash(): void {
     }
   })();
   void splashLoading;
+}
+
+function ensurePunch(): void {
+  if (punchBuf || punchLoading) return;
+  punchLoading = (async () => {
+    try {
+      const res = await fetch('sounds/punch.mp3');
+      if (!res.ok) return;
+      const ab = await res.arrayBuffer();
+      const c = ac();
+      if (!c) return;
+      punchBuf = await c.decodeAudioData(ab);
+    } catch { /* mantém sintetizado */ }
+    finally {
+      punchLoading = null;
+    }
+  })();
+  void punchLoading;
+}
+
+function playPunchSample(): boolean {
+  const c = ac();
+  if (!c || !master || muted || !punchBuf) return false;
+  try {
+    const now = performance.now();
+    if (now - lastPunchAt < 200) return true;
+    lastPunchAt = now;
+    const src = c.createBufferSource();
+    src.buffer = punchBuf;
+    const g = c.createGain();
+    g.gain.value = 0.8;
+    src.connect(g);
+    g.connect(master);
+    src.start();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function playSplashSample(): boolean {
@@ -276,8 +320,11 @@ export function playSfx(name: SfxName): void {
       tone({ f: 300, f2: 620, t: 'sine', d: 0.16, v: 0.35 });
       break;
     case 'thud':
-      tone({ f: 130, f2: 55, t: 'sine', d: 0.2, v: 0.6 });
-      noise({ d: 0.12, f: 500, v: 0.3 });
+      ensurePunch();
+      if (!playPunchSample()) {
+        tone({ f: 130, f2: 55, t: 'sine', d: 0.2, v: 0.6 });
+        noise({ d: 0.12, f: 500, v: 0.3 });
+      }
       break;
     case 'boom':
       noise({ d: 0.7, f: 2200, f2: 90, v: 0.7 });

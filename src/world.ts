@@ -2235,15 +2235,62 @@ const towerBox = new THREE.Box3();
       }
     });
     this.scene.add(wrap);
-    // colisor na medida (gira junto)
-    const sxw = size.x * s, syw = size.y * s, szw = size.z * s;
-    const c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw));
-    const hw = (sxw * c + szw * sn) / 2;
-    const hd = (sxw * sn + szw * c) / 2;
+    // colisor segue as PAREDES (a loja é em U aberta na frente: 1 caixa única
+    // tampava a porta). Grade de 1m: cada célula com estrutura baixa vira uma
+    // caixa até o topo dela (máx 3m); porta e telhado ficam livres.
+    wrap.updateMatrixWorld(true);
+    const cell = 0.5;
+    const gw = Math.ceil((size.x * s) / cell);
+    const gd = Math.ceil((size.z * s) / cell);
+    const minY = new Float32Array(gw * gd).fill(1e9);
+    const maxY = new Float32Array(gw * gd).fill(-1e9);
+    const cos = Math.cos(-yaw), sin = Math.sin(-yaw);
+    wrap.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const me = m.matrixWorld.elements;
+      for (let i = 0; i < pos.count; i += 4) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
+        const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
+        const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
+        // mundo -> referencial da loja (desfaz posição + giro)
+        const dx = wx - sx, dz = wz - sz;
+        const lx = dx * cos - dz * sin;
+        const lz = dx * sin + dz * cos;
+        const ix = Math.floor(lx / cell + gw / 2);
+        const iz = Math.floor(lz / cell + gd / 2);
+        if (ix < 0 || ix >= gw || iz < 0 || iz >= gd) continue;
+        const k = iz * gw + ix;
+        if (wy < minY[k]!) minY[k] = wy;
+        if (wy > maxY[k]!) maxY[k] = wy;
+      }
+    });
     const body = this.fixedBody(sx, sz);
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(hw, syw / 2, hd).setTranslation(0, sgy + syw / 2, 0), body);
-    console.log(`[shop] loja carregada: ${sxw.toFixed(1)}x${syw.toFixed(1)}x${szw.toFixed(1)}m`);
+    const qy = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
+    let boxes = 0;
+    for (let iz = 0; iz < gd; iz++) {
+      for (let ix = 0; ix < gw; ix++) {
+        const k = iz * gw + ix;
+        // só estrutura BAIXA (parede/balcão); ignora telhado e porta aberta
+        if (minY[k]! > sgy + 3) continue;
+        const top = Math.min(maxY[k]!, sgy + 3);
+        if (top - sgy < 0.4) continue;
+        const clx = (ix - gw / 2 + 0.5) * cell;
+        const clz = (iz - gd / 2 + 0.5) * cell;
+        const wx = sx + clx * Math.cos(yaw) + clz * Math.sin(yaw);
+        const wz = sz - clx * Math.sin(yaw) + clz * Math.cos(yaw);
+        const h = top - sgy;
+        this.world.createCollider(
+          RAPIER.ColliderDesc.cuboid(cell / 2, h / 2, cell / 2)
+            .setTranslation(wx - sx, sgy + h / 2, wz - sz)
+            .setRotation(qy), body);
+        boxes++;
+      }
+    }
+    console.log(`[shop] loja carregada: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m, ${boxes} caixas`);
   }
 
   private buildMine() {

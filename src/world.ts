@@ -486,7 +486,6 @@ private buildRoads() {
   private buildingTemplates: {
     group: THREE.Group; halfW: number; halfD: number; height: number; minY: number;
     tcx: number; tcz: number;
-    bands: { halfW: number; halfD: number }[];
   }[] = [];
   private buildingLoading: Promise<void> | null = null;
 
@@ -532,7 +531,6 @@ private buildRoads() {
       const groupNames: string[] = [];
       let bi = 0;
 const towerBox = new THREE.Box3();
-      const vertSources: { gp: THREE.BufferAttribute; gi: THREE.BufferAttribute | null; me: number[]; start: number; end: number }[] = [];
       const partLog: string[] = [];
       model.updateMatrixWorld(true);
       model.traverse((o) => {
@@ -568,12 +566,6 @@ const towerBox = new THREE.Box3();
             const flatPlate = bs.y < 3 && Math.max(bs.x, bs.z) > 30;
             if (!/grass|ground|base|plane|terrain|road|sidewalk|asphalt|groundcover|vegetation/i.test(nm) && !flatPlate) {
               towerBox.union(b);
-              if (gp) {
-                vertSources.push({
-                  gp, gi: gi ?? null, me: [...m.matrixWorld.elements],
-                  start: gr.start, end: Math.min(gr.start + gr.count, gi ? gi.count : vCount),
-                });
-              }
             }
           }
         });
@@ -584,38 +576,11 @@ const towerBox = new THREE.Box3();
       // centro da torre (o modelo nem sempre é centrado: sem isso o visual desloca do collider)
       const tcx = (box.min.x + box.max.x) / 2;
       const tcz = (box.min.z + box.max.z) / 2;
-      // pegada por faixa de altura (12 bandas, 1 vértice a cada 4).
-      // Larguras simétricas em torno do centro (concêntrico e seguro).
-      const NB = 12;
-      const bMinX = new Array<number>(NB).fill(tcx);
-      const bMaxX = new Array<number>(NB).fill(tcx);
-      const bMinZ = new Array<number>(NB).fill(tcz);
-      const bMaxZ = new Array<number>(NB).fill(tcz);
-      for (const vs of vertSources) {
-        const me = vs.me;
-        for (let k = vs.start; k < vs.end; k += 4) {
-          const vi = vs.gi ? vs.gi.getX(k) : k;
-          const x = vs.gp.getX(vi), y = vs.gp.getY(vi), z = vs.gp.getZ(vi);
-          const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
-          const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
-          const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
-          const bi = Math.max(0, Math.min(NB - 1, Math.floor(((wy - box.min.y) / size.y) * NB)));
-          if (wx < bMinX[bi]!) bMinX[bi] = wx; if (wx > bMaxX[bi]!) bMaxX[bi] = wx;
-          if (wz < bMinZ[bi]!) bMinZ[bi] = wz; if (wz > bMaxZ[bi]!) bMaxZ[bi] = wz;
-        }
-      }
-      const bands: { halfW: number; halfD: number }[] = [];
-      for (let i = 0; i < NB; i++) {
-        bands.push({
-          halfW: Math.max(bMaxX[i]! - tcx, tcx - bMinX[i]!, 0.5),
-          halfD: Math.max(bMaxZ[i]! - tcz, tcz - bMinZ[i]!, 0.5),
-        });
-      }
       console.log(`[building] ${f}.obj meshes=${meshCount} size=${size.x.toFixed(1)}x${size.y.toFixed(1)}x${size.z.toFixed(1)} parts=${partLog.join('|').slice(0, 400)}`);
       this.buildingTemplates.push({
         group: model as unknown as THREE.Group,
         halfW: size.x / 2, halfD: size.z / 2, height: size.y, minY: box.min.y,
-        tcx, tcz, bands,
+        tcx, tcz,
       });
     }
   }
@@ -644,41 +609,7 @@ const towerBox = new THREE.Box3();
     }
   }
 
-  /** Térreo em 1 caixa JUSTA (sem emendas pra enroscar): mede só o que está na
-   *  altura da vaca (0-4.5m; beiral/copa de cima não entram). Sem parede invisível
-   *  e sem buraco. Portas ficam fechadas (entrar prendia a vaca lá dentro). */
-  private buildGroundCells(
-    g: THREE.Group, bx: number, bz: number,
-    halfW: number, halfD: number, body: RAPIER.RigidBody,
-  ): RAPIER.Collider {
-    g.updateMatrixWorld(true);
-    let minX = 1e9, minZ = 1e9, maxX = -1e9, maxZ = -1e9;
-    g.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (!pos) return;
-      const me = m.matrixWorld.elements;
-      for (let i = 0; i < pos.count; i += 8) {
-        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-        const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
-        const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
-        const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
-        if (wy < 0 || wy > 4.5) continue;
-        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
-        if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
-      }
-    });
-    let hw = (maxX - minX) / 2, hd = (maxZ - minZ) / 2;
-    let cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-    if (!(hw > 0.5) || !(hd > 0.5)) {
-      hw = halfW; hd = halfD; cx = bx; cz = bz;
-    }
-    return this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(hw, 3, hd).setTranslation(cx - bx, 3, cz - bz), body);
-  }
-
-  /** Prédio de modelo: escala pra altura sorteada, collider box na medida. */
+  /** Prédio de modelo: escala pra altura sorteada, hitbox = o próprio trimesh. */
   private tryModelBuilding(bx: number, bz: number, target: number): boolean {
     const tpl = this.buildingTemplates[Math.floor(worldRand() * this.buildingTemplates.length)];
     if (!tpl || tpl.height <= 0) return false;
@@ -718,27 +649,42 @@ const towerBox = new THREE.Box3();
     }
     this.scene.add(g);
     const body = this.fixedBody(bx, bz);
-    // térreo (0-6m) em GRADE seguindo as paredes (portas/lobbies livres, igual à
-    // loja); andares de cima em caixas sólidas por faixa. Sem parede invisível.
-    const odd = rotIdx % 2 === 1;
-    const NB = tpl.bands.length;
-    let collider!: RAPIER.Collider;
-    collider = this.buildGroundCells(g, bx, bz, halfW, halfD, body);
-    const groups: [number, number][] = [[6, bh * 0.4], [bh * 0.4, bh * 0.7], [bh * 0.7, bh]];
-    for (const [g0, g1] of groups) {
-      let hw = 0.5, hd = 0.5;
-      for (let i = 0; i < NB; i++) {
-        const y0 = (i / NB) * bh;
-        const y1 = ((i + 1) / NB) * bh;
-        if (y1 > g0 && y0 < g1) {
-          const bb = tpl.bands[i]!;
-          hw = Math.max(hw, (odd ? bb.halfD : bb.halfW) * s);
-          hd = Math.max(hd, (odd ? bb.halfW : bb.halfD) * s);
-        }
+    // hitbox = O PRÓPRIO MODELO 3D (trimesh do visual, igual ao terreno):
+    // sem aproximação de caixas, sem ar, sem buraco. Portas e reentrâncias valem.
+    g.updateMatrixWorld(true);
+    const vPos: number[] = [];
+    const vIdx: number[] = [];
+    let base = 0;
+    let ok = false;
+    const tv = new THREE.Vector3();
+    g.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      const index = m.geometry.index;
+      if (!pos) return;
+      for (let i = 0; i < pos.count; i++) {
+        tv.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        // relativo ao corpo (que está em bx, 0, bz)
+        vPos.push(tv.x - bx, tv.y, tv.z - bz);
       }
-      const h = Math.max(0.5, g1 - g0);
+      if (index) {
+        const arr = index.array;
+        for (let i = 0; i < arr.length; i++) vIdx.push(base + arr[i]!);
+      } else {
+        for (let i = 0; i < pos.count; i++) vIdx.push(base + i);
+      }
+      base += pos.count;
+      ok = true;
+    });
+    let collider!: RAPIER.Collider;
+    if (ok && vIdx.length >= 3) {
       collider = this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(hw, h / 2, hd).setTranslation(0, g0 + h / 2, 0), body);
+        RAPIER.ColliderDesc.trimesh(new Float32Array(vPos), new Uint32Array(vIdx)), body);
+    } else {
+      // fallback (seguro): caixa cheia
+      collider = this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(halfW, bh / 2, halfD).setTranslation(0, bh / 2, 0), body);
     }
     this.buildings.push({
       id: this.nextId(), x: bx, z: bz, halfW, halfD, height: bh,

@@ -31,7 +31,6 @@ export class Game {
   private npcs: NPCPhysics[] = [];
   private net = new NetManager();
   private remoteCows = new Map<string, RemoteCow>();
-  private shopGoat: NPCPhysics | null = null;
   private netActive = false;
   private netAcc = 0;
 
@@ -395,15 +394,7 @@ constructor() {}
       const gz = GOATS.z + Math.sin(th) * rr;
       placeNPC(gx, gz, 'goat');
     }
-    // bode vendedor da loja de skins (atrás do balcão, paradão)
-    {
-      const vendor = this.npcFactory.create(this.scene, this.physics, GOATS.x - 24, GOATS.z + 18, 'goat');
-      vendor.vendor = true;
-      vendor.tx = GOATS.x - 24;
-      vendor.tz = GOATS.z + 18;
-      this.npcs.push(vendor);
-      this.shopGoat = vendor;
-    }
+    // (a loja de skins do usuário já tem bode próprio; sem vendedor NPC)
     // trabalhadores da fazenda (poucos: spawn tranquilo)
     for (let i = 0; i < 6; i++) {
       let gx = BALL.x, gz = BALL.z;
@@ -966,7 +957,7 @@ constructor() {}
     const cz = this.cow.group.position.z;
     if (this.carrying) {
       status = 'Carregando! [E] Canhao | [F] Soltar';
-    } else if (this.shopGoat && Math.hypot(this.shopGoat.body.translation().x - cx, this.shopGoat.body.translation().z - cz) < 6) {
+    } else if (Math.hypot(this.world.skinShop.x - cx, this.world.skinShop.z - cz) < 7) {
       status = '[E] Loja de skins 🐐';
     } else {
       const nearCannon = this.world.cannons.some((c) =>
@@ -1072,13 +1063,10 @@ constructor() {}
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
 
-    // bode vendedor: abre a loja (vale carregando ou não)
-    if (this.shopGoat) {
-      const t = this.shopGoat.body.translation();
-      if (Math.hypot(t.x - cx, t.z - cz) < 6) {
-        this.openSkinMenu();
-        return;
-      }
+    // loja de skins do usuário: abre perto dela (vale carregando ou não)
+    if (Math.hypot(this.world.skinShop.x - cx, this.world.skinShop.z - cz) < 7) {
+      this.openSkinMenu();
+      return;
     }
 
     // bíblia: levita a pessoa pra sempre (E num levitando pega de volta)

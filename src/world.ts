@@ -2195,34 +2195,55 @@ const towerBox = new THREE.Box3();
     }
     this.buildFenceRect(cx - 6, cz - 12, 10, 8);
     this.buildFenceRect(cx + 8, cz + 14, 10, 8);
-    // barraca da loja de skins (bode vendedor fica atrás do balcão)
-    {
-      const sx = cx - 24, sz = cz + 16;
-      const sgy = this.groundHeight(sx, sz);
-      const woodMat = new THREE.MeshLambertMaterial({ color: 0x7a5a30 });
-      const clothMat = new THREE.MeshLambertMaterial({ color: 0xcc3355, side: THREE.DoubleSide });
-      const shopBody = this.fixedBody(sx, sz);
-      // balcão (sólido: a vaca para aqui)
-      const counter = new THREE.Mesh(new THREE.BoxGeometry(4, 1.2, 1.5), woodMat);
-      counter.position.set(sx, sgy + 0.6, sz);
-      counter.castShadow = true; counter.receiveShadow = true;
-      this.scene.add(counter);
-      this.solidBox(shopBody, 0, sgy + 0.6, 0, 2, 0.6, 0.75);
-      // 4 postes + toldo
-      for (const [ox, oz] of [[-2.2, -1.2], [2.2, -1.2], [-2.2, 1.2], [2.2, 1.2]]) {
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3, 6), woodMat);
-        post.position.set(sx + ox, sgy + 1.5, sz + oz);
-        post.castShadow = true;
-        this.scene.add(post);
+    this.buildSkinShop(cx - 24, cz + 16);
+  }
+
+  /** Loja de skins do usuário (shop.glb): frente +X virada pro centro da cidade. */
+  skinShop = { x: 0, z: 0 };
+
+  private buildSkinShop(sx: number, sz: number) {
+    this.skinShop = { x: sx, z: sz };
+    void this.loadSkinShop(sx, sz).catch((err) => {
+      console.warn('Loja de skins nao carregou:', err);
+    });
+    this.logProp('skinshop', sx, sz);
+  }
+
+  private async loadSkinShop(sx: number, sz: number): Promise<void> {
+    const sgy = this.groundHeight(sx, sz);
+    const gltf = await new GLTFLoader().loadAsync('models/shop/shop.glb');
+    const model = gltf.scene;
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const s = Math.max(size.x, size.z) > 0 ? 6.5 / Math.max(size.x, size.z) : 1;
+    const inner = new THREE.Group();
+    inner.add(model);
+    inner.position.set(-center.x, -box.min.y, -center.z);
+    const yaw = 0.6; // frente (+X) pro centro (sudeste)
+    const wrap = new THREE.Group();
+    wrap.add(inner);
+    wrap.scale.setScalar(s);
+    wrap.rotation.y = yaw;
+    wrap.position.set(sx, sgy, sz);
+    wrap.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
       }
-      const roof = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.15, 3.4), clothMat);
-      roof.position.set(sx, sgy + 3.1, sz);
-      roof.castShadow = true;
-      this.scene.add(roof);
-      const signBody = this.fixedBody(sx, sz);
-      this.makeSign(['LOJA DE', 'SKINS 🐐'], sx, sz - 3, Math.PI, signBody);
-      this.logProp('skinshop', sx, sz);
-    }
+    });
+    this.scene.add(wrap);
+    // colisor na medida (gira junto)
+    const sxw = size.x * s, syw = size.y * s, szw = size.z * s;
+    const c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw));
+    const hw = (sxw * c + szw * sn) / 2;
+    const hd = (sxw * sn + szw * c) / 2;
+    const body = this.fixedBody(sx, sz);
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(hw, syw / 2, hd).setTranslation(0, sgy + syw / 2, 0), body);
+    console.log(`[shop] loja carregada: ${sxw.toFixed(1)}x${syw.toFixed(1)}x${szw.toFixed(1)}m`);
   }
 
   private buildMine() {

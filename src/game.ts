@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Input } from './input';
-import { World, islandRadius, BALL, BRIDGE, CITY, SPAWN, MINE, MANSION, FOREST, GOATS } from './world';
+import { World, islandRadius, BALL, BRIDGES, CITY, SPAWN, MINE, MANSION, FOREST, GOATS } from './world';
 import { Cow, COW_SCALE } from './cow';
 import { NPCFactory, isSweater } from './npc';
 import type { NPCPhysics } from './npc';
@@ -314,7 +314,7 @@ constructor() {}
     this.world = new World(this.scene, this.physics, loading);
     loading(5, 'Criando chao...');
 
-    await this.world.buildBuildings(40);
+    await this.world.buildBuildings(60);
     await this.world.buildTrees(100);
     this.world.buildCannons(16);
     await this.world.buildGrass(3000);
@@ -380,16 +380,18 @@ constructor() {}
         if (npcSpotOk(CITY.x + d, CITY.z + k * 400 + jz)) placeNPC(CITY.x + d, CITY.z + k * 400 + jz);
       }
     }
-    // ponte (poucos)
-    for (let z = -1400, s = 1; z <= -1120; z += 40, s *= -1) {
-      const px = s * 3;
-      if (this.onBridge(px, z)) placeNPC(px, z);
+    // pontes (poucos em cada travessia)
+    for (const b of BRIDGES) {
+      for (let z = b.z0 + 40, s = 1; z <= b.z1 - 40; z += 60, s *= -1) {
+        const px = b.x + s * 2.5;
+        if (this.onBridge(px, z)) placeNPC(px, z);
+      }
     }
     // bodes da cidade das cabras
-    await this.world.buildForestPatch(FOREST.x, FOREST.z, FOREST.r, 150);
+    await this.world.buildForestPatch(FOREST.x, FOREST.z, FOREST.r, 350);
     for (let i = 0; i < 10; i++) {
       const th = worldRand() * Math.PI * 2;
-      const rr = Math.sqrt(worldRand()) * 30;
+      const rr = Math.sqrt(worldRand()) * 150;
       const gx = GOATS.x + Math.cos(th) * rr;
       const gz = GOATS.z + Math.sin(th) * rr;
       placeNPC(gx, gz, 'goat');
@@ -400,7 +402,7 @@ constructor() {}
       let gx = BALL.x, gz = BALL.z;
       for (let a = 0; a < 12; a++) {
         const th = worldRand() * Math.PI * 2;
-        const rr = Math.sqrt(worldRand()) * 60;
+        const rr = Math.sqrt(worldRand()) * 200;
         gx = BALL.x + Math.cos(th) * rr;
         gz = BALL.z + Math.sin(th) * rr;
         if (Math.hypot(gx - SPAWN.x, gz - SPAWN.z) >= 12) break;
@@ -1452,7 +1454,7 @@ constructor() {}
   }
 
   private onBridge(x: number, z: number): boolean {
-    return x > BRIDGE.x0 - 0.5 && x < BRIDGE.x1 + 0.5 && z > BRIDGE.z0 && z < BRIDGE.z1;
+    return BRIDGES.some((b) => Math.abs(x - b.x) < 4.5 && z > b.z0 && z < b.z1);
   }
 
   private updateCarried(dt: number) {

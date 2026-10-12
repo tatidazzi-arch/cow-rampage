@@ -95,21 +95,28 @@ export function islandRadius(theta: number, withBay: boolean): number {
   return r;
 }
 
-// ---- Segunda ilha (redonda, da fazenda) + ponte ----
+// ---- Segunda ilha (redonda, da fazenda) + 3 pontes ----
 export const BALL = { x: 0, z: -1850, r: 420 };
-export const BRIDGE = { x0: -4, x1: 4, z0: -1440, z1: -1080 };
+/** Travessias ilha da fazenda <-> principal (oeste/centro/leste). */
+export const BRIDGES = [
+  { x: -300, z0: -1560, z1: -1080 },
+  { x: 120, z0: -1500, z1: -1080 },
+  { x: 350, z0: -1620, z1: -1080 },
+];
+/** Compat: ponte central (formato antigo x0/x1/z0/z1). */
+export const BRIDGE = { x0: 116, x1: 124, z0: -1500, z1: -1080 };
 
-// ---- Distritos do mapa desenhado ----
-export const FARM = { x: 0, z: -1850, r: 60 };
-export const DAM_RECT = { x0: -440, x1: -80, z0: -520, z1: -320 };
-export const CITY = { x: 0, z: 150, r: 450 };
+// ---- Distritos da planta (2 ilhas, biomas grandes com espaço definido) ----
+export const FARM = { x: 0, z: -1850, r: 350 };
+export const DAM_RECT = { x0: -180, x1: 20, z0: -1420, z1: -1300 };
+export const CITY = { x: 0, z: -350, r: 600 };
 /** Nascimento da vaca (pasto aberto da fazenda, longe das construções). */
 export const SPAWN = { x: -40, z: -1810 };
-export const MANSION = { x: -850, z: -100 };
-export const CEMETERY = { x: -450, z: -50, r: 25 };
-export const FOREST = { x: 800, z: 200, r: 150 };
-export const GOATS = { x: 950, z: 600, r: 40 };
-export const MINE = { x: -700, z: 800, r: 70 };
+export const MANSION = { x: -1050, z: -50 };
+export const CEMETERY = { x: -450, z: -50, r: 130 };
+export const FOREST = { x: 950, z: 250, r: 350 };
+export const GOATS = { x: 800, z: 800, r: 260 };
+export const MINE = { x: -600, z: 850, r: 320 };
 
 export class World {
   buildings: Building[] = [];
@@ -171,7 +178,7 @@ export class World {
     if (Math.hypot(x - FARM.x, z - FARM.z) < FARM.r + 4) return true;
     if (x > DAM_RECT.x0 - 4 && x < DAM_RECT.x1 + 4 && z > DAM_RECT.z0 - 4 && z < DAM_RECT.z1 + 4) return true;
     if (includeCity && Math.hypot(x - CITY.x, z - CITY.z) < CITY.r) return true;
-    if (Math.hypot(x - MANSION.x, z - MANSION.z) < 40) return true;
+    if (Math.hypot(x - MANSION.x, z - MANSION.z) < 75) return true;
     if (Math.hypot(x - CEMETERY.x, z - CEMETERY.z) < CEMETERY.r + 4) return true;
     if (Math.hypot(x - GOATS.x, z - GOATS.z) < GOATS.r + 2) return true;
     if (Math.hypot(x - MINE.x, z - MINE.z) < MINE.r + 2) return true;
@@ -337,7 +344,9 @@ export class World {
     m = Math.max(m, 1 - smoothstep(300, 360, Math.hypot(x - BALL.x, z - BALL.z)));
     if (Math.abs(x) < 14 && z > -1090 && z < 1160) m = 1;
     if (Math.abs(z) < 14 && x > -1405 && x < 1155) m = 1;
-    if (Math.abs(x) < 12 && z > -1450 && z < -1070) m = 1;
+    for (const b of BRIDGES) {
+      if (Math.abs(x - b.x) < 10 && z > b.z0 - 20 && z < b.z1 + 10) m = 1;
+    }
     if (x > DAM_RECT.x0 - 20 && x < DAM_RECT.x1 + 20 && z > DAM_RECT.z0 - 20 && z < DAM_RECT.z1 + 20) m = 1;
     const dc = Math.hypot(x - CEMETERY.x, z - CEMETERY.z);
     m = Math.max(m, (1 - smoothstep(CEMETERY.r, CEMETERY.r + 30, dc)) * 0.85);
@@ -376,8 +385,37 @@ export class World {
         const rocky = Math.min(1, Math.max(0, (slope - 0.5) * 2) + Math.max(0, h - 30) / 40);
         if (rocky > 0) c.lerp(rock, Math.min(1, rocky));
       }
+      // biomas da planta: cada um com sua cor (fora d'água)
+      if (h >= -0.6) {
+        const df = Math.hypot(x - FARM.x, z - FARM.z);
+        if (df < BALL.r) {
+          c.setHex(0x55a02e); // fazenda: verde vivo com listras de plantação
+          c.multiplyScalar(0.92 + 0.08 * Math.sin(x * 0.35));
+        }
+        const ff = Math.hypot(x - FOREST.x, z - FOREST.z);
+        if (ff < FOREST.r) {
+          c.setHex(0x2d6a1a); // floresta: verde fechado
+          c.multiplyScalar(0.9 + 0.2 * Math.sin(x * 0.05 + z * 0.07));
+        }
+        const gf = Math.hypot(x - GOATS.x, z - GOATS.z);
+        if (gf < GOATS.r) {
+          c.setHex(0x8a7a8c); // goat town: terra roxa acinzentada
+          c.multiplyScalar(0.92 + 0.16 * Math.sin(x * 0.11 + z * 0.13));
+        }
+        const cf = Math.hypot(x - CEMETERY.x, z - CEMETERY.z);
+        if (cf < CEMETERY.r + 20) {
+          c.setHex(0x3a5a3a); // cemitério: verde-escuro sóbrio
+          c.multiplyScalar(0.9 + 0.1 * Math.sin(x * 0.2 + z * 0.17));
+        }
+        const dm2 = Math.hypot(x - MANSION.x, z - MANSION.z);
+        if (dm2 < 280) {
+          c.setHex(0x4f9430); // gramado do palácio (cobre o marrom da altura)
+          c.multiplyScalar(0.92 + 0.08 * Math.sin(x * 0.09 + z * 0.11));
+        }
+      }
       const dv = Math.hypot(x - MINE.x, z - MINE.z);
-      if (dv < 150) c.lerp(new THREE.Color(0x3a3230), (1 - dv / 150) * 0.7);
+      if (dv < MINE.r) c.lerp(new THREE.Color(0xa08a4a), (1 - dv / MINE.r) * 0.55); // minas: terra ocre
+      if (dv < 150) c.lerp(new THREE.Color(0x3a3230), (1 - dv / 150) * 0.7); // núcleo vulcânico
       colors[i * 3] = c.r;
       colors[i * 3 + 1] = c.g;
       colors[i * 3 + 2] = c.b;
@@ -452,8 +490,8 @@ private buildRoads() {
       const x = Math.cos(thm) * r;
       const z = Math.sin(thm) * r;
       const segLen = (2 * Math.PI * ISLAND_R) / N + 4;
-      // gap da ponte: pula segmentos que cruzam o corredor x=±8 na regiao da baia
-      if (z < -950 && Math.abs(x) < segLen / 2 + 10) continue;
+      // gaps das pontes: pula segmentos nas 3 chegadas (baia norte)
+      if (z < -950 && BRIDGES.some((b) => Math.abs(x - b.x) < segLen / 2 + 12)) continue;
       const yaw = -thm - Math.PI / 2;
       const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, 4, z);
       const body = this.world.createRigidBody(bodyDesc);
@@ -470,7 +508,7 @@ private buildRoads() {
       const x = BALL.x + Math.cos(thm) * (BALL.r + 5);
       const z = BALL.z + Math.sin(thm) * (BALL.r + 5);
       const segLen = (2 * Math.PI * BALL.r) / NB + 4;
-      if (z > -1500 && z < -1300 && Math.abs(x) < segLen / 2 + 10) continue;
+      if (z > -1700 && z < -1300 && BRIDGES.some((b) => Math.abs(x - b.x) < segLen / 2 + 12)) continue;
       const yaw = -thm - Math.PI / 2;
       const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, 4, z);
       const body = this.world.createRigidBody(bodyDesc);
@@ -926,6 +964,10 @@ const towerBox = new THREE.Box3();
       const tx = cx + Math.cos(th) * rr;
       const tz = cz + Math.sin(th) * rr;
       if (!this.isOnIsland(tx, tz, 3)) continue;
+      if (Math.abs(tx) < 9.5 && tz > -1085 && tz < 1155) continue; // avenida N-S
+      if (Math.abs(tz) < 9.5 && tx > -1405 && tx < 1155) continue; // avenida E-W
+      if (Math.hypot(tx - GOATS.x, tz - GOATS.z) < GOATS.r * 0.8) continue; // vila
+      if (Math.hypot(tx - (cx + 10), tz - (cz + 15)) < 8) continue; // clareira
       let inBuilding = false;
       for (const b of this.buildings) {
         if (Math.abs(tx - b.x) < b.halfW + 1.5 && Math.abs(tz - b.z) < b.halfD + 1.5) { inBuilding = true; break; }
@@ -1954,34 +1996,37 @@ const towerBox = new THREE.Box3();
     }
   }
 
-  /** Ponte da barragem: liga a ilha redonda a principal (piso no nivel da rua). */
+  /** Pontes da planta: 3 travessias ilha da fazenda <-> principal (piso na rua). */
   private buildBridge() {
+    for (const b of BRIDGES) this.buildOneBridge(b.x, b.z0, b.z1);
+  }
+
+  private buildOneBridge(bx: number, z0: number, z1: number) {
     const deckMat = new THREE.MeshLambertMaterial({ color: 0x777777 });
     const railMat = new THREE.MeshLambertMaterial({ color: 0xaa3333 });
-    const cx = (BRIDGE.x0 + BRIDGE.x1) / 2;
-    const cz = (BRIDGE.z0 + BRIDGE.z1) / 2;
-    const len = BRIDGE.z1 - BRIDGE.z0;
+    const cz = (z0 + z1) / 2;
+    const len = z1 - z0;
     const deck = new THREE.Mesh(new THREE.BoxGeometry(8, 0.75, len), deckMat);
-    deck.position.set(cx, -0.225, cz);
+    deck.position.set(bx, -0.225, cz);
     deck.receiveShadow = true;
     this.scene.add(deck);
-    const bBody = this.fixedBody(cx, cz);
+    const bBody = this.fixedBody(bx, cz);
     this.solidBox(bBody, 0, -0.225, 0, 4, 0.375, len / 2);
     // corrimãos (seguram a vaca na ponte)
     for (const s of [-1, 1]) {
       for (const hy of [0.7, 1.1]) {
         const rail = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.12, len), railMat);
-        rail.position.set(cx + s * 3.9, hy, cz);
+        rail.position.set(bx + s * 3.9, hy, cz);
         this.scene.add(rail);
       }
-      for (let z = BRIDGE.z0 + 2; z <= BRIDGE.z1 - 1; z += 4) {
+      for (let z = z0 + 2; z <= z1 - 1; z += 4) {
         const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.2, 0.18), railMat);
-        post.position.set(cx + s * 3.9, 0.6, z);
+        post.position.set(bx + s * 3.9, 0.6, z);
         this.scene.add(post);
       }
       this.solidBox(bBody, s * 3.9, 0.55, 0, 0.1, 0.55, len / 2);
     }
-    this.logProp('bridge', cx, cz);
+    this.logProp('bridge', bx, cz);
   }
 
   private buildDam() {
@@ -2019,8 +2064,9 @@ const towerBox = new THREE.Box3();
     const stoneMat = new THREE.MeshLambertMaterial({ color: 0x8f8f8f });
     const darkMat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a });
     const body = this.fixedBody(cx, cz);
+    const tombs = Math.min(130, Math.max(20, Math.round(r * 0.95)));
     let placed = 0, guard = 0;
-    while (placed < 20 && guard++ < 300) {
+    while (placed < tombs && guard++ < tombs * 15) {
       const th = worldRand() * Math.PI * 2;
       const rr = 5 + Math.sqrt(worldRand()) * (r - 6);
       const sx = cx + Math.cos(th) * rr;
@@ -2283,7 +2329,20 @@ const towerBox = new THREE.Box3();
     const { x: cx, z: cz } = GOATS;
     const wallColors = [0xe8d8b0, 0xd0e8d0, 0xe8c0c0, 0xd0d0e8, 0xf0e8c8];
     const roofMat = new THREE.MeshLambertMaterial({ color: 0x7a4a2a });
-    const spots: Array<[number, number]> = [[-10, -6], [8, -8], [-2, 8], [12, 6], [-12, 8], [20, 0], [-2, -14], [2, 14]];
+    // vila: 20 casas espalhadas (rejeita perto demais uma da outra)
+    const spots: Array<[number, number]> = [];
+    {
+      let guard = 0;
+      while (spots.length < 20 && guard++ < 600) {
+        const th = worldRand() * Math.PI * 2;
+        const rr = 15 + Math.sqrt(worldRand()) * 135;
+        const ox = Math.cos(th) * rr, oz = Math.sin(th) * rr;
+        if (spots.some(([px, pz]) => Math.hypot(px - ox, pz - oz) < 16)) continue;
+        if (Math.hypot(ox + 6, oz + 12) < 13 || Math.hypot(ox - 8, oz - 14) < 13) continue; // cercados
+        if (Math.hypot(ox + 24, oz - 16) < 12) continue; // loja
+        spots.push([ox, oz]);
+      }
+    }
     for (let i = 0; i < spots.length; i++) {
       const [ox, oz] = spots[i];
       const hx = cx + ox, hz = cz + oz;
@@ -2438,15 +2497,32 @@ const { x: cx, z: cz } = MINE;
       mkDerrick(-90, -40, 30);
       mkDerrick(-60, 60, 25);
       this.logProp('derrick', cx - 90, cz - 40);
+      // distrito grande: mais 4 torres espalhadas (fora da cratera)
+      {
+        const placed: Array<[number, number]> = [[-90, -40], [-60, 60]];
+        let guard = 0, extra = 0;
+        while (extra < 4 && guard++ < 200) {
+          const th = worldRand() * Math.PI * 2;
+          const rr = 180 + worldRand() * 100;
+          const ox = Math.cos(th) * rr, oz = Math.sin(th) * rr;
+          if (Math.hypot(cx + ox, cz + oz) > 1450) continue; // dentro da ilha
+          if (placed.some(([px, pz]) => Math.hypot(px - ox, pz - oz) < 70)) continue;
+          placed.push([ox, oz]);
+          mkDerrick(ox, oz, 22 + worldRand() * 10);
+          this.logProp('derrick', cx + ox, cz + oz);
+          extra++;
+        }
+      }
     }
     // máquinas de extrair petróleo (vigas animadas no updatePumps)
     const pumpBaseMat = new THREE.MeshLambertMaterial({ color: 0x8a2f23 });
     const pumpDarkMat = new THREE.MeshLambertMaterial({ color: 0x2e2e2e });
-    const angles = [0.4, 1.8, 3.3, 4.9];
+    const angles = [0.4, 1.8, 3.3, 4.9, 0.9, 2.4, 4.1, 5.6];
     for (let pi = 0; pi < angles.length; pi++) {
       const pa = angles[pi];
-      const px = cx + Math.cos(pa) * (130 + (pi % 2) * 40);
-      const pz = cz + Math.sin(pa) * (130 + (pi % 2) * 40);
+      const prad = pi < 4 ? 130 + (pi % 2) * 40 : 200 + (pi % 2) * 50;
+      const px = cx + Math.cos(pa) * prad;
+      const pz = cz + Math.sin(pa) * prad;
       const gy = this.groundHeight(px, pz);
       const yaw = Math.atan2(-px, -pz) + Math.PI / 2;
       const pump = new THREE.Group();
@@ -2587,13 +2663,13 @@ const { x: cx, z: cz } = MINE;
     const faceCenter = (x: number, z: number): number => Math.atan2(-x, -z);
     const signBody = this.fixedBody(0, 0);
     this.makeSign(['FAZENDA'], 80, -1520, faceCenter(80, -1520), signBody);
-    this.makeSign(['REPRESA'], -20, -300, faceCenter(-20, -300), signBody);
+    this.makeSign(['REPRESA'], -80, -1470, faceCenter(-80, -1470), signBody);
     this.makeSign(['CIDADE'], 60, -60, Math.PI, signBody);
-    this.makeSign(['MANSÃO DO', 'PRESIDENTE RAMPIG'], -700, -100, faceCenter(-700, -100), signBody);
-    this.makeSign(['CEMITÉRIO'], -450, 150, 0, signBody);
-    this.makeSign(['FLORESTA'], 420, 200, Math.PI / 2, signBody);
-    this.makeSign(['CIDADE DAS', 'CABRAS'], 750, 500, faceCenter(750, 500), signBody);
+    this.makeSign(['MANSÃO DO', 'PRESIDENTE RAMPIG'], -980, 30, faceCenter(-980, 30), signBody);
+    this.makeSign(['CEMITÉRIO'], CEMETERY.x, CEMETERY.z + CEMETERY.r + 10, 0, signBody);
+    this.makeSign(['FLORESTA'], 580, 250, faceCenter(580, 250), signBody);
+    this.makeSign(['CIDADE DAS', 'CABRAS'], 770, 520, faceCenter(770, 520), signBody);
     this.makeSign(['MINAS'], -535, 612, faceCenter(-535, 612), signBody);
-    this.makeSign(['PONTE'], 80, -1060, Math.PI, signBody);
+    this.makeSign(['PONTE'], 140, -1050, Math.PI, signBody);
   }
 }

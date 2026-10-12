@@ -182,6 +182,85 @@ export class World {
     return this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, 0, z));
   }
 
+  /** Hitbox = O PRÓPRIO MODELO 3D (trimesh do visual, igual ao terreno).
+   *  Corpo fixo em (bx, 0, bz); Y absoluto. Retorna false se vazio. */
+  private visualTrimesh(root: THREE.Object3D, bx: number, bz: number, body: RAPIER.RigidBody): boolean {
+    root.updateMatrixWorld(true);
+    const vPos: number[] = [];
+    const vIdx: number[] = [];
+    let base = 0;
+    const tv = new THREE.Vector3();
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      const index = m.geometry.index;
+      if (!pos) return;
+      for (let i = 0; i < pos.count; i++) {
+        tv.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        vPos.push(tv.x - bx, tv.y, tv.z - bz);
+      }
+      if (index) {
+        const arr = index.array;
+        for (let i = 0; i < arr.length; i++) vIdx.push(base + arr[i]!);
+      } else {
+        for (let i = 0; i < pos.count; i++) vIdx.push(base + i);
+      }
+      base += pos.count;
+    });
+    if (vIdx.length < 3) return false;
+    this.world.createCollider(
+      RAPIER.ColliderDesc.trimesh(new Float32Array(vPos), new Uint32Array(vIdx)), body);
+    return true;
+  }
+
+  /** Trimesh fatiado em células (modelos gigantes: ~1M tris de uma vez o Rapier
+   *  cria mas as consultas atravessam; em 10-20 pedaços funciona). */
+  private visualTrimeshChunked(root: THREE.Object3D, bx: number, bz: number,
+    body: RAPIER.RigidBody, gx = 4, gz = 4): number {
+    root.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(root);
+    if (bb.isEmpty()) return 0;
+    const sx = Math.max(1, (bb.max.x - bb.min.x) / gx);
+    const sz = Math.max(1, (bb.max.z - bb.min.z) / gz);
+    const cells = new Map<number, number[]>();
+    const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      const index = m.geometry.index;
+      if (!pos) return;
+      const nTri = Math.floor((index ? index.count : pos.count) / 3);
+      for (let t = 0; t < nTri; t++) {
+        let ia: number, ib: number, ic: number;
+        if (index) { ia = index.getX(t * 3); ib = index.getX(t * 3 + 1); ic = index.getX(t * 3 + 2); }
+        else { ia = t * 3; ib = t * 3 + 1; ic = t * 3 + 2; }
+        va.fromBufferAttribute(pos, ia).applyMatrix4(m.matrixWorld);
+        vb.fromBufferAttribute(pos, ib).applyMatrix4(m.matrixWorld);
+        vc.fromBufferAttribute(pos, ic).applyMatrix4(m.matrixWorld);
+        const wx = (va.x + vb.x + vc.x) / 3;
+        const wz = (va.z + vb.z + vc.z) / 3;
+        const kx = Math.max(0, Math.min(gx - 1, Math.floor((wx - bb.min.x) / sx)));
+        const kz = Math.max(0, Math.min(gz - 1, Math.floor((wz - bb.min.z) / sz)));
+        const key = kx + kz * gx;
+        let arr = cells.get(key);
+        if (!arr) { arr = []; cells.set(key, arr); }
+        arr.push(va.x - bx, va.y, va.z - bz, vb.x - bx, vb.y, vb.z - bz, vc.x - bx, vc.y, vc.z - bz);
+      }
+    });
+    let made = 0;
+    for (const arr of cells.values()) {
+      const n = arr.length / 3;
+      if (n < 3) continue;
+      const idx = new Uint32Array(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      this.world.createCollider(RAPIER.ColliderDesc.trimesh(new Float32Array(arr), idx), body);
+      made++;
+    }
+    return made;
+  }
+
   private solidBox(body: RAPIER.RigidBody, ox: number, oy: number, oz: number, hx: number, hy: number, hz: number): void {
     this.world.createCollider(
       RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(ox, oy, oz), body);
@@ -2152,14 +2231,18 @@ const towerBox = new THREE.Box3();
       }
     });
     this.scene.add(wrap);
-    // Hitbox em 4 caixas (bloco central + 2 alas + pórtico): o trimesh de ~1M
-    // triângulos cria o colisor mas as consultas atravessam (limite do Rapier);
-    // caixas são sólidas, rápidas e sem buraco. Faces nas colunas/paredes.
+    // hitbox = o próprio palácio (trimesh fatiado do visual: escada e
+    // colunas valem de verdade; portas/reentrâncias valem)
     const body = this.fixedBody(cx, cz - 8);
-    this.solidBox(body, 0, gy + 10.5, -2, 10, 10.5, 15);
-    this.solidBox(body, -18.5, gy + 7.5, -2, 8.5, 7.5, 15);
-    this.solidBox(body, 18.5, gy + 7.5, -2, 8.5, 7.5, 15);
-    this.solidBox(body, 0, gy + 8, 16, 7, 8, 3);
+    const chunks = this.visualTrimeshChunked(wrap, cx, cz - 8, body);
+    console.log(`[mansion] palácio em ${chunks} pedaços de trimesh`);
+    if (chunks === 0) {
+      // fallback (nunca acontece): 4 caixas
+      this.solidBox(body, 0, gy + 10.5, -2, 10, 10.5, 15);
+      this.solidBox(body, -18.5, gy + 7.5, -2, 8.5, 7.5, 15);
+      this.solidBox(body, 18.5, gy + 7.5, -2, 8.5, 7.5, 15);
+      this.solidBox(body, 0, gy + 8, 16, 7, 8, 3);
+    }
   }
 
   /** Casa Branca procedural (fallback se o palace.fbx não carregar). */
@@ -2267,46 +2350,11 @@ const towerBox = new THREE.Box3();
       }
     });
     this.scene.add(wrap);
-    // 1 caixa JUSTA e ALTA: mede SÓ a parte baixa (paredes/balcão até 3m;
-    // o beiral do telhado (largo) não entra na medida, senão para no ar).
-    // A caixa vai do chão ao topo (não entra, não sobe no balcão).
-    wrap.updateMatrixWorld(true);
-    let lMinX = 1e9, lMinZ = 1e9, lMaxX = -1e9, lMaxZ = -1e9, topY = sgy;
-    {
-      const cos = Math.cos(-yaw), sin = Math.sin(-yaw);
-      wrap.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-        if (!pos) return;
-        const me = m.matrixWorld.elements;
-        for (let i = 0; i < pos.count; i += 6) {
-          const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-          const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
-          const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
-          const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
-          if (wy > topY) topY = wy;
-          if (wy < sgy + 0.3 || wy > sgy + 3) continue;
-          const dx = wx - sx, dz = wz - sz;
-          const lx = dx * cos - dz * sin;
-          const lz = dx * sin + dz * cos;
-          if (lx < lMinX) lMinX = lx; if (lx > lMaxX) lMaxX = lx;
-          if (lz < lMinZ) lMinZ = lz; if (lz > lMaxZ) lMaxZ = lz;
-        }
-      });
-    }
-    if (lMinX > lMaxX) { lMinX = -2; lMaxX = 2; lMinZ = -2; lMaxZ = 2; topY = sgy + 4; }
+    // hitbox = a própria loja (trimesh do visual; balcão/porta valem de verdade)
     const body = this.fixedBody(sx, sz);
-    const qy = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
-    const ccx = (lMinX + lMaxX) / 2, ccz = (lMinZ + lMaxZ) / 2;
-    const hwx = (lMaxX - lMinX) / 2, hwz = (lMaxZ - lMinZ) / 2;
-    const hh = Math.max(1, topY - sgy);
-    const wcx = sx + ccx * Math.cos(yaw) + ccz * Math.sin(yaw);
-    const wcz = sz - ccx * Math.sin(yaw) + ccz * Math.cos(yaw);
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(Math.max(0.5, hwx), hh / 2, Math.max(0.5, hwz))
-        .setTranslation(wcx - sx, sgy + hh / 2, wcz - sz)
-        .setRotation(qy), body);
+    if (!this.visualTrimesh(wrap, sx, sz, body)) {
+      this.solidBox(body, 0, sgy + 2, 0, 3, 2, 3); // fallback (nunca acontece)
+    }
     console.log(`[shop] loja carregada: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);
   }
 

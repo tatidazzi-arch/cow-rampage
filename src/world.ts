@@ -2046,36 +2046,11 @@ const towerBox = new THREE.Box3();
       }
       this.solidBox(fenceBody, ox, railY(1.4), FD / 2, segLen / 2, 1.4, 0.1);
     }
-    // Casa Branca: corpo + pórtico de colunas + janelas + porta
-    const house = new THREE.Mesh(new THREE.BoxGeometry(30, 12, 18), whiteMat);
-    house.position.set(cx, gy + 6, cz - 8);
-    house.castShadow = true; house.receiveShadow = true;
-    this.scene.add(house);
-    const hBody = this.fixedBody(cx, cz - 8);
-    this.solidBox(hBody, 0, gy + 6, 0, 15, 6, 9);
-    const entab = new THREE.Mesh(new THREE.BoxGeometry(34, 1.5, 20), trimMat);
-    entab.position.set(cx, gy + 12.5, cz - 8);
-    this.scene.add(entab);
-    for (let i = -2; i <= 2; i++) {
-      const colM = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.8, 11, 10), whiteMat);
-      colM.position.set(cx + i * 5, gy + 5.5, cz + 2.5);
-      colM.castShadow = true;
-      this.scene.add(colM);
-    }
-    for (const wx of [-10, -5, 5, 10]) {
-      const win = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3, 0.2), darkMat);
-      win.position.set(cx + wx, gy + 7, cz + 1.1);
-      this.scene.add(win);
-    }
-    const door = new THREE.Mesh(new THREE.BoxGeometry(3, 4.5, 0.3),
-      new THREE.MeshLambertMaterial({ color: 0x4a2f1a }));
-    door.position.set(cx, gy + 2.25, cz + 1.1);
-    this.scene.add(door);
-    for (let s = 0; s < 3; s++) {
-      const step = new THREE.Mesh(new THREE.BoxGeometry(6 - s, 0.5, 2 + s * 1.2), trimMat);
-      step.position.set(cx, gy + 0.25 + s * 0.4, cz + 3 + s * 0.8);
-      this.scene.add(step);
-    }
+    // Palácio histórico (palace.fbx) no lugar da Casa Branca; cerca/jardim ficam.
+    // Carrega em segundo plano; se falhar, cai pra Casa Branca procedural.
+    void this.loadMansionPalace(cx, cz, gy).catch(() => {
+      this.buildWhiteHouse(cx, cz, gy, whiteMat, trimMat, darkMat);
+    });
     // jardim: canteiros + fonte + lampiões
     const soilMat = new THREE.MeshLambertMaterial({ color: 0x4a3520 });
     const flowerMats = [0xd43a3a, 0xe8c832, 0xe88ac8].map((cc) => new THREE.MeshLambertMaterial({ color: cc }));
@@ -2143,6 +2118,82 @@ const towerBox = new THREE.Box3();
     this.scene.add(hBar2);
     this.logProp('helipad', cx - 45, cz + 30);
     this.logProp('mansion', cx, cz);
+  }
+
+  /** Palácio da mansão (models/mansion/palace.fbx): 40m de largura, base no chão,
+   *  hitbox = o próprio trimesh. */
+  private async loadMansionPalace(cx: number, cz: number, gy: number): Promise<void> {
+    const model = await new FBXLoader().loadAsync('models/mansion/palace.fbx');
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    let tris = 0;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh && m.geometry.index) tris += m.geometry.index.count / 3;
+    });
+    console.log(`[mansion] palace size=${size.x.toFixed(1)}x${size.y.toFixed(1)}x${size.z.toFixed(1)}`);
+    const s = Math.max(size.x, size.z) > 0 ? 55 / Math.max(size.x, size.z) : 1;
+    const inner = new THREE.Group();
+    inner.add(model);
+    inner.position.set(-center.x, -box.min.y, -center.z);
+    const wrap = new THREE.Group();
+    wrap.add(inner);
+    wrap.scale.setScalar(s);
+    // frente (pórtico) pro sul: tapete/portão/fonte estão no eixo +Z
+    wrap.rotation.y = -Math.PI / 2;
+    wrap.position.set(cx, gy, cz - 8);
+    wrap.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
+    this.scene.add(wrap);
+    // Hitbox em 4 caixas (bloco central + 2 alas + pórtico): o trimesh de ~1M
+    // triângulos cria o colisor mas as consultas atravessam (limite do Rapier);
+    // caixas são sólidas, rápidas e sem buraco. Faces nas colunas/paredes.
+    const body = this.fixedBody(cx, cz - 8);
+    this.solidBox(body, 0, gy + 10.5, -2, 10, 10.5, 15);
+    this.solidBox(body, -18.5, gy + 7.5, -2, 8.5, 7.5, 15);
+    this.solidBox(body, 18.5, gy + 7.5, -2, 8.5, 7.5, 15);
+    this.solidBox(body, 0, gy + 8, 16, 7, 8, 3);
+  }
+
+  /** Casa Branca procedural (fallback se o palace.fbx não carregar). */
+  private buildWhiteHouse(cx: number, cz: number, gy: number,
+    whiteMat: THREE.Material, trimMat: THREE.Material, darkMat: THREE.Material): void {
+    const house = new THREE.Mesh(new THREE.BoxGeometry(30, 12, 18), whiteMat);
+    house.position.set(cx, gy + 6, cz - 8);
+    house.castShadow = true; house.receiveShadow = true;
+    this.scene.add(house);
+    const hBody = this.fixedBody(cx, cz - 8);
+    this.solidBox(hBody, 0, gy + 6, 0, 15, 6, 9);
+    const entab = new THREE.Mesh(new THREE.BoxGeometry(34, 1.5, 20), trimMat);
+    entab.position.set(cx, gy + 12.5, cz - 8);
+    this.scene.add(entab);
+    for (let i = -2; i <= 2; i++) {
+      const colM = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.8, 11, 10), whiteMat);
+      colM.position.set(cx + i * 5, gy + 5.5, cz + 2.5);
+      colM.castShadow = true;
+      this.scene.add(colM);
+    }
+    for (const wx of [-10, -5, 5, 10]) {
+      const win = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3, 0.2), darkMat);
+      win.position.set(cx + wx, gy + 7, cz + 1.1);
+      this.scene.add(win);
+    }
+    const door = new THREE.Mesh(new THREE.BoxGeometry(3, 4.5, 0.3),
+      new THREE.MeshLambertMaterial({ color: 0x4a2f1a }));
+    door.position.set(cx, gy + 2.25, cz + 1.1);
+    this.scene.add(door);
+    for (let s = 0; s < 3; s++) {
+      const step = new THREE.Mesh(new THREE.BoxGeometry(6 - s, 0.5, 2 + s * 1.2), trimMat);
+      step.position.set(cx, gy + 0.25 + s * 0.4, cz + 3 + s * 0.8);
+      this.scene.add(step);
+    }
   }
 
   private buildGoatCity() {

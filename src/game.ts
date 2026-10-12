@@ -18,6 +18,9 @@ import {
 import { isTouchDevice, setupTouchControls } from './touch';
 import { isMuted, playSfx, resumeAudio, toggleMute } from './sound';
 
+/** Hash do commit injetado no build (vite.config). */
+declare const __COMMIT__: string;
+
 export class Game {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
@@ -446,6 +449,15 @@ constructor() {}
     mousehint.id = 'mousehint';
     mousehint.textContent = 'Clique na tela para ativar o mouse (arrastar tambem olha)';
     document.body.appendChild(mousehint);
+
+    // indicador de versão: qual commit está no ar (até na tela da senha)
+    const commitTag = document.createElement('div');
+    commitTag.id = 'commitTag';
+    commitTag.textContent = `v ${typeof __COMMIT__ !== 'undefined' ? __COMMIT__ : 'dev'}`;
+    commitTag.style.cssText = 'position:fixed;left:6px;bottom:2px;z-index:9999;'
+      + 'font:11px monospace;color:#fff;opacity:.55;pointer-events:none;'
+      + 'text-shadow:1px 1px 2px #000;';
+    document.body.appendChild(commitTag);
 
     const mission = document.createElement('div');
     mission.id = 'mission';

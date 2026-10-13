@@ -467,7 +467,19 @@ export class NPCFactory {
     wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
     wrap.updateMatrixWorld(true);
     const clips = model.animations ?? [];
-    NPCFactory.walkerClip = clips.length > 0 ? clips[0]! : null;
+    const clip = clips.length > 0 ? clips[0]! : null;
+    // sem root motion: o quadril do Mixamo translada e o loop dá tranco pra
+    // trás; congela X/Z (anda no lugar, o corpo físico move). Y balança ok.
+    if (clip) {
+      for (const track of clip.tracks) {
+        if (/hips|root/i.test(track.name) && track.name.endsWith('.position')) {
+          const vals = (track as THREE.VectorKeyframeTrack).values;
+          const fx = vals[0]!, fz = vals[2]!;
+          for (let i = 0; i < vals.length; i += 3) { vals[i] = fx; vals[i + 2] = fz; }
+        }
+      }
+    }
+    NPCFactory.walkerClip = clip;
     console.log(`[npc] walker: ${meshes} meshes, altura ${(h * s).toFixed(2)}m, anims=${clips.map((c) => `${c.name}:${c.duration.toFixed(2)}s`).join(',') || 'nenhuma'}`);
     NPCFactory.walkerTemplate = wrap;
   }

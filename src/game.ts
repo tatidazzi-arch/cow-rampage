@@ -41,6 +41,8 @@ export class Game {
   private lastScore = 0;
   private quality: 'high' | 'low' = 'high';
   private sunLight: THREE.DirectionalLight | null = null;
+  /** Cúpula do céu (gradiente + sol): segue a câmera, 1 draw call. */
+  private skyDome: THREE.Mesh | null = null;
   private menuCamT = 0;
   private chaos = 0;
   private carrying: NPCPhysics | null = null;
@@ -143,8 +145,8 @@ constructor() {}
     this.initParticles();
 
     this.scene.add(new THREE.AmbientLight(0x606080, 0.6));
-    const dl = new THREE.DirectionalLight(0xfff5e0, 1.2);
-    dl.position.set(50, 80, 30);
+    const dl = new THREE.DirectionalLight(0xffdfb0, 1.25);
+    dl.position.set(50, 21, 30);
     dl.castShadow = true;
     dl.shadow.mapSize.width = 1024;
     dl.shadow.mapSize.height = 1024;
@@ -164,6 +166,40 @@ constructor() {}
     this.scene.add(dl.target);
     this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4));
     this.sunLight = dl;
+    // Sol + atmosfera: cúpula com gradiente (zênite->horizonte), disco solar e
+    // halo alinhados com a luz de verdade (mesma direção do updateSun).
+    {
+      // raio 1000: dentro do camera.far dinâmico (min ~1600 na cidade)
+      const skyGeo = new THREE.SphereGeometry(1000, 24, 16);
+      const sunDir = new THREE.Vector3(50, 21, 30).normalize();
+      const skyMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: { sunDir: { value: sunDir } },
+        vertexShader: 'varying vec3 vDir; void main() { vDir = normalize(position);'
+          + ' gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: [
+          'varying vec3 vDir; uniform vec3 sunDir;',
+          'void main() {',
+          '  float h = clamp(vDir.y, -1.0, 1.0);',
+          '  vec3 zen = vec3(0.20, 0.45, 0.85);',
+          '  vec3 hor = vec3(0.78, 0.88, 0.95);',
+          '  vec3 col = mix(hor, zen, smoothstep(0.0, 0.6, h));',
+          '  col = mix(vec3(0.35, 0.55, 0.75), col, smoothstep(-0.15, 0.02, h));',
+          '  float s = max(dot(normalize(vDir), normalize(sunDir)), 0.0);',
+          '  col += vec3(1.0, 0.95, 0.85) * smoothstep(0.9993, 0.9997, s) * 4.0;',
+          '  col += vec3(1.0, 0.85, 0.6) * pow(s, 350.0) * 0.6;',
+          '  col += vec3(1.0, 0.9, 0.7) * pow(s, 8.0) * 0.12;',
+          '  gl_FragColor = vec4(col, 1.0);',
+          '}',
+        ].join('\n'),
+      });
+      const sky = new THREE.Mesh(skyGeo, skyMat);
+      sky.frustumCulled = false;
+      this.scene.add(sky);
+      this.skyDome = sky;
+    }
     this.applyQuality();
 
     window.addEventListener('resize', () => {
@@ -1923,9 +1959,11 @@ constructor() {}
     const dl = this.sunLight;
     if (!dl) return;
     const t = this.cow.group.position;
-    dl.position.set(t.x + 50, t.y + 80, t.z + 30);
+    dl.position.set(t.x + 50, t.y + 21, t.z + 30);
     dl.target.position.set(t.x, t.y, t.z);
     dl.target.updateMatrixWorld();
+    // a cúpula acompanha a câmera (o sol fica parado no céu)
+    if (this.skyDome) this.skyDome.position.copy(this.camera.position);
   }
 
   /** Vitrine no menu: câmera orbitando a fazenda + vaca pastando. */

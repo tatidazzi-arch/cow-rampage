@@ -329,6 +329,7 @@ constructor() {}
     this.npcFactory = new NPCFactory();
     await this.npcFactory.preload();
     await this.npcFactory.preloadZane();
+    await this.npcFactory.preloadWalker();
     const placeNPC = (x: number, z: number, kind?: 'goat') => {
       const n = this.npcFactory.create(this.scene, this.physics, x, z, kind);
       // sem sombra (são pequenos; economiza 1 passe inteiro no shadow map)

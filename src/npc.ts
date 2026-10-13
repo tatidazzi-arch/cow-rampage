@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { worldRand } from './rng';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { playSfx, speakComplaint } from './sound';
@@ -58,6 +59,9 @@ export class NPCFactory {
   // Zane (zane.fbx): template com esqueleto, clonado por NPC (sem barba/pelos)
   private static zaneTemplate: THREE.Group | null = null;
   private static zaneLoading: Promise<void> | null = null;
+  // Walker (walking.fbx): humano com animação de andar, clonado por NPC
+  private static walkerTemplate: THREE.Group | null = null;
+  private static walkerLoading: Promise<void> | null = null;
   // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
   private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
 
@@ -72,9 +76,12 @@ export class NPCFactory {
 
     // ~20% detalhados (zane raro + caçador), 80% procedural colorido de antes
     const npcKind = forceKind ?? (id % 34 === 1 ? 'zane' : id % 6 === 1 ? 'business' : 'normal');
+    // ~1/6 dos normais usa o Walker (continua 'normal': missão do suéter vale)
+    const useWalker = npcKind === 'normal' && id % 6 === 3 && NPCFactory.walkerTemplate;
     const mesh = npcKind === 'goat' ? this.buildGoatMesh()
       : npcKind === 'zane' ? this.buildZaneMesh()
       : npcKind === 'business' ? this.buildBountyMesh()
+      : useWalker ? this.buildWalkerMesh()
       : this.buildProceduralMesh(shirt, skin, hair, pants);
     mesh.position.set(x, 0, z);
     scene.add(mesh);
@@ -388,6 +395,76 @@ export class NPCFactory {
     wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
     wrap.updateMatrixWorld(true);
     NPCFactory.zaneTemplate = wrap;
+  }
+
+  /** Pré-carrega o Walker (chamar antes de criar NPCs, junto do preload). */
+  async preloadWalker(): Promise<void> {
+    if (NPCFactory.walkerTemplate || NPCFactory.walkerLoading) {
+      if (NPCFactory.walkerLoading) await NPCFactory.walkerLoading;
+      return;
+    }
+    NPCFactory.walkerLoading = this.loadWalker().catch((err) => {
+      console.warn('Modelo walker nao carregou, usando fallback:', err);
+    });
+    await NPCFactory.walkerLoading;
+  }
+
+  /** Walker: normaliza via wrapper (altura 1.8, pés -0.14, centrado).
+   *  Pose de descanso do primeiro frame (sem mixer: 50+ mixers pesaria). */
+  private async loadWalker(): Promise<void> {
+    const model = await new FBXLoader().loadAsync('models/npc/walking.fbx');
+    let meshes = 0;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh && !(o as THREE.SkinnedMesh).isSkinnedMesh) return;
+      meshes++;
+      m.castShadow = false;
+      m.receiveShadow = false;
+      m.frustumCulled = false;
+      // FBX vem com transparent=true (vira fantasma): sólido de verdade
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mm of mats) {
+        if (mm && (mm as THREE.Material).transparent) {
+          (mm as THREE.Material).transparent = false;
+          mm.needsUpdate = true;
+        }
+      }
+    });
+    model.updateMatrixWorld(true);
+    let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const me = m.matrixWorld.elements;
+      for (let i = 0; i < pos.count; i += 8) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
+        const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
+        const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+        if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
+      }
+    });
+    const h = maxY - minY;
+    const s = h > 0 ? 1.8 / h : 1;
+    const wrap = new THREE.Group();
+    wrap.add(model);
+    wrap.scale.setScalar(s);
+    wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
+    wrap.updateMatrixWorld(true);
+    console.log(`[npc] walker: ${meshes} meshes, altura ${(h * s).toFixed(2)}m`);
+    NPCFactory.walkerTemplate = wrap;
+  }
+
+  /** Walker (clone com esqueleto próprio). Fallback = procedural. */
+  private buildWalkerMesh(): THREE.Group {
+    const tpl = NPCFactory.walkerTemplate;
+    if (tpl) return cloneSkinned(tpl) as THREE.Group;
+    return this.buildProceduralMesh(new THREE.Color(0x3264c8), new THREE.Color(0xffdcba),
+      new THREE.Color(0x191919), new THREE.Color(0x2d2d8c));
   }
 
   /** Zane (clone com esqueleto próprio, sem cabelo). Fallback = caixa escura. */

@@ -11,6 +11,8 @@ const HALF_H = 1.1 * COW_SCALE;
 export class Cow {
   group: THREE.Group;
   body: RAPIER.RigidBody;
+  private world: RAPIER.World;
+  private collider: RAPIER.Collider;
   legs: THREE.Mesh[] = [];
   head!: THREE.Mesh;
   tail!: THREE.Mesh;
@@ -38,6 +40,7 @@ export class Cow {
   private skin: Skin = { id: 'comum', name: '', price: 0, tint: 0xffffff };
 
   constructor(scene: THREE.Scene, world: RAPIER.World, spawnX = 0, spawnZ = 0) {
+    this.world = world;
     this.group = new THREE.Group();
     this.buildMesh();
     this.buildGadgets();
@@ -48,10 +51,10 @@ export class Cow {
       .setLinearDamping(0.5)
       .lockRotations();
     this.body = world.createRigidBody(bodyDesc);
-    // Box no tamanho real da vaca 2x: largura 1.4, altura 4.4, comprimento 4.6
+    // Box no tamanho real da vaca 2x (provisório: vira hull do modelo no load)
     // Box arredondado no tamanho real: desliza nos cantos em vez de enganchar
     const colliderDesc = RAPIER.ColliderDesc.roundCuboid(0.4, HALF_H - 0.3, 1.15 * COW_SCALE - 0.3, 0.3);
-    world.createCollider(colliderDesc, this.body);
+    this.collider = world.createCollider(colliderDesc, this.body);
 
     scene.add(this.group);
 
@@ -181,6 +184,9 @@ export class Cow {
       const wrap = new THREE.Group();
       wrap.add(spawned.model);
       this.group.add(wrap);
+      // hitbox = a própria vaca (convex hull do modelo em pose de descanso;
+      // trimesh não vale em corpo dinâmico, hull é o equivalente válido)
+      this.swapToHull(spawned.model);
 
       // Esconde a vaca procedural (fallback) agora que o modelo real chegou.
       for (const child of [...this.group.children]) {
@@ -197,6 +203,59 @@ export class Cow {
       this.playClip('idle', 1);
     } catch (err) {
       console.warn('Modelo FBX da vaca nao carregou, usando procedural:', err);
+    }
+  }
+
+  /** Troca a caixa provisória pelo convex hull do modelo (espaço normalizado:
+   *  pés em y=0, centrado no XZ — relativo ao PAI (mantém escala/offset do
+   *  inner, tira só o giro/posição do grupo); pose de descanso, sem gadgets). */
+  private swapToHull(model: THREE.Group): void {
+    try {
+      if (!model.parent) return;
+      model.parent.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(model.parent.matrixWorld).invert();
+      const m2 = new THREE.Matrix4();
+      const v = new THREE.Vector3();
+      const pts: number[] = [];
+      let minY = 1e9, maxY = -1e9;
+      let maxX = 0, maxZ = 0;
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+        if (!pos) return;
+        m2.multiplyMatrices(inv, m.matrixWorld);
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(m2);
+          pts.push(v.x, v.y, v.z);
+          if (v.y < minY) minY = v.y;
+          if (v.y > maxY) maxY = v.y;
+          const ax = Math.abs(v.x), az = Math.abs(v.z);
+          if (ax > maxX) maxX = ax;
+          if (az > maxZ) maxZ = az;
+        }
+      });
+      // tampa até a altura da cabeça erguida (3.6): a pose de descanso tem a
+      // cabeça baixa, mas parede alta (loja) precisa encostar em cima também,
+      // senão a vaca escala o beiral. Borda arredondada desliza, não engancha.
+      const TOP = 3.6;
+      if (maxY < TOP) {
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) pts.push(sx * maxX, TOP, sz * maxZ);
+        maxY = TOP;
+      }
+      if (pts.length < 12) return;
+      // borda arredondada (igual o bevel da caixa antiga): desliza nos cantos
+      const desc = RAPIER.ColliderDesc.roundConvexHull(new Float32Array(pts), 0.25);
+      if (!desc) {
+        console.warn('[vaca] hull falhou, mantendo caixa');
+        return;
+      }
+      this.world.removeCollider(this.collider, true);
+      // pés (y=0 do modelo) na base do corpo: translada -HALF_H
+      this.collider = this.world.createCollider(desc.setTranslation(0, -HALF_H, 0), this.body);
+      console.log(`[vaca] hull do modelo: y ${minY.toFixed(2)}..${maxY.toFixed(2)} (${(pts.length / 3).toFixed(0)} pts)`);
+    } catch (err) {
+      console.warn('[vaca] hull falhou, mantendo caixa:', err);
     }
   }
 

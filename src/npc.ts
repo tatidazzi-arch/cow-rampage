@@ -22,6 +22,8 @@ export interface NPCPhysics {
   /** destino secreto (ninguém vê): anda até lá e sorteia outro */
   tx: number;
   tz: number;
+  /** mixer da animação de andar (só walkers; congela se não está andando) */
+  mixer?: THREE.AnimationMixer | null;
   /** levitação da bíblia: timer de faísca */
   levT: number;
   /** cooldown de reclamação em voz (0 = pode reclamar) */
@@ -62,6 +64,7 @@ export class NPCFactory {
   // Walker (walking.fbx): humano com animação de andar, clonado por NPC
   private static walkerTemplate: THREE.Group | null = null;
   private static walkerLoading: Promise<void> | null = null;
+  private static walkerClip: THREE.AnimationClip | null = null;
   // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
   private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
 
@@ -122,6 +125,14 @@ export class NPCFactory {
       sayT: 0,
       skinSeat: { shirt, skin, hair, pants },
     };
+    // walker com animação: mixer próprio, clipe em loop (só anda no 'walk')
+    if (useWalker && NPCFactory.walkerClip) {
+      const mixer = new THREE.AnimationMixer(mesh);
+      mixer.clipAction(NPCFactory.walkerClip).play();
+      npc.mixer = mixer;
+    } else {
+      npc.mixer = null;
+    }
     return npc;
   }
 
@@ -455,7 +466,9 @@ export class NPCFactory {
     wrap.scale.setScalar(s);
     wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
     wrap.updateMatrixWorld(true);
-    console.log(`[npc] walker: ${meshes} meshes, altura ${(h * s).toFixed(2)}m`);
+    const clips = model.animations ?? [];
+    NPCFactory.walkerClip = clips.length > 0 ? clips[0]! : null;
+    console.log(`[npc] walker: ${meshes} meshes, altura ${(h * s).toFixed(2)}m, anims=${clips.map((c) => `${c.name}:${c.duration.toFixed(2)}s`).join(',') || 'nenhuma'}`);
     NPCFactory.walkerTemplate = wrap;
   }
 
@@ -578,6 +591,11 @@ export class NPCFactory {
   /** Desconta o cooldown de fala. */
   tickSay(npc: NPCPhysics, dt: number): void {
     if (npc.sayT > 0) npc.sayT = Math.max(0, npc.sayT - dt);
+  }
+
+  /** Avança a animação de andar (só andando; segurado/caído congela). */
+  tickAnim(npc: NPCPhysics, dt: number): void {
+    if (npc.mixer && npc.state === 'walk') npc.mixer.update(dt);
   }
 
   syncMesh(npc: NPCPhysics) {

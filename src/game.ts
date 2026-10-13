@@ -1601,6 +1601,7 @@ constructor() {}
       }
       this.npcFactory.syncMesh(n);
       this.npcFactory.tickSay(n, dt);
+      this.npcFactory.tickAnim(n, dt);
       // afogado (ex.: lançado pelo canhão na água): volta pra ilha principal
       // (levitando nunca afoga)
       if (t.y < 0.5 && n.state !== 'carried' && n.state !== 'inCannon' && n.state !== 'levitate'

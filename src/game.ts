@@ -1690,8 +1690,10 @@ constructor() {}
             this.spawnParticles(cwx, t.y + 1, cwz, 8, 0xff8830);
             this.input.rumble(1, 0.5, 200);
           } else {
+            // chega freando (sem montar na vaca): para a 2.6m e chuta dali
             const v = n.body.linvel();
-            n.body.setLinvel({ x: (rdx / rd) * 8, y: v.y, z: (rdz / rd) * 8 }, true);
+            const spd = Math.max(0, Math.min(8, (rd - 2.6) * 4));
+            n.body.setLinvel({ x: (rdx / rd) * spd, y: v.y, z: (rdz / rd) * spd }, true);
           }
           break;
         }

@@ -270,12 +270,17 @@ export class World {
     this.props.push({ name, x, z });
   }
 
-  /** Noite: vidros das torres acesos (quente) — 0 de dia. */
+  /** Noite: vidros das torres + lampadas dos postes acesos — 0 de dia. */
   applyNight(nightF: number): void {
     for (const g of this.towerGlassMats) {
       g.mat.emissive.setHex(0xffbf6a);
       g.mat.emissiveIntensity = nightF * g.glow;
     }
+    if (this.lampGlassMat) {
+      this.lampGlassMat.emissive.setHex(0xffd9a0);
+      this.lampGlassMat.emissiveIntensity = nightF * 2;
+    }
+    if (this.lampHaloMat) this.lampHaloMat.opacity = nightF * 0.9;
   }
 
   private buildGround(): RAPIER.RigidBody {
@@ -1445,11 +1450,13 @@ const towerBox = new THREE.Box3();
     void this.loadCarModel();
   }
 
-  /** Postes da avenida (streetlamp.fbx): 1 mesh fundido, clones nas calçadas. */
+  /** Postes da avenida (streetlamp.fbx): corpo fundido + vidro separado (acende). */
   /** Vidros das torres (acesos à noite) + bulbos dos postes (luz de verdade). */
   private towerGlassMats: { mat: THREE.MeshLambertMaterial; glow: number }[] = [];
   lampBulbs: { x: number; y: number; z: number }[] = [];
-  private lampTemplate: THREE.Mesh | null = null;
+  private lampTemplate: THREE.Group | null = null;
+  private lampGlassMat: THREE.MeshLambertMaterial | null = null;
+  private lampHaloMat: THREE.PointsMaterial | null = null;
   private lampBulb = new THREE.Vector3(0, 9.2, 0); // bulbo no espaço do modelo
   private lampHead = new THREE.Vector2(1, 0); // direção do braço no espaço do modelo (x, z)
   private lampLoading: Promise<void> | null = null;
@@ -1516,16 +1523,36 @@ const towerBox = new THREE.Box3();
         bulbMats.push(m4.clone());
       }
     }
-    // 1 InstancedMesh pros 50+ bulbos (acesos de verdade à noite)
+    // brilho em volta de cada bulbo: 1 Points com halo (sem bola sólida)
     if (bulbMats.length > 0) {
-      const bulbs = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(0.28, 8, 6),
-        new THREE.MeshBasicMaterial({ color: 0xffe2a8 }),
-        bulbMats.length);
-      bulbMats.forEach((mm, idx) => bulbs.setMatrixAt(idx, mm));
-      bulbs.instanceMatrix.needsUpdate = true;
-      bulbs.frustumCulled = false;
-      this.scene.add(bulbs);
+      const haloTex = (() => {
+        const c = document.createElement('canvas');
+        c.width = 128; c.height = 128;
+        const g = c.getContext('2d')!;
+        const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+        grad.addColorStop(0, 'rgba(255,225,160,1)');
+        grad.addColorStop(0.35, 'rgba(255,200,115,0.55)');
+        grad.addColorStop(1, 'rgba(255,180,80,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 128, 128);
+        const tex = new THREE.CanvasTexture(c);
+        return tex;
+      })();
+      const hg = new THREE.BufferGeometry();
+      const hp = new Float32Array(bulbMats.length * 3);
+      bulbMats.forEach((mm, idx) => {
+        hp[idx * 3] = mm.elements[12];
+        hp[idx * 3 + 1] = mm.elements[13];
+        hp[idx * 3 + 2] = mm.elements[14];
+      });
+      hg.setAttribute('position', new THREE.BufferAttribute(hp, 3));
+      this.lampHaloMat = new THREE.PointsMaterial({
+        map: haloTex, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending, size: 5, sizeAttenuation: true,
+      });
+      const halo = new THREE.Points(hg, this.lampHaloMat);
+      halo.frustumCulled = false;
+      this.scene.add(halo);
     }
   }
 
@@ -1533,12 +1560,13 @@ const towerBox = new THREE.Box3();
   private async loadLampTemplate(): Promise<void> {
     const model = await new FBXLoader().loadAsync('models/lamp/streetlamp.fbx');
     model.updateMatrixWorld(true);
-    const geos: THREE.BufferGeometry[] = [];
+    const geos: { g: THREE.BufferGeometry; glass: boolean }[] = [];
     model.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
       const mat = Array.isArray(m.material) ? m.material[0] : m.material;
       const c = this.lampColor((mat as THREE.Material)?.name);
+      const glass = Math.abs(c.r - 1) < 0.06 && Math.abs(c.g - 0.886) < 0.06 && Math.abs(c.b - 0.659) < 0.06;
       const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
       if (!g.index) {
         const n = g.getAttribute('position').count;
@@ -1558,11 +1586,15 @@ const towerBox = new THREE.Box3();
         if (name !== 'position' && name !== 'normal' && name !== 'color') g.deleteAttribute(name);
       }
       if (!g.getAttribute('normal')) g.computeVertexNormals();
-      geos.push(g);
+      geos.push({ g, glass });
     });
-    const merged = geos.length > 0 ? mergeGeometries(geos, false) : null;
+    // corpo + vidro separados (vidro tem material próprio: acende à noite)
+    const bodyGeos = geos.filter((e) => !e.glass).map((e) => e.g);
+    const glassGeos = geos.filter((e) => e.glass).map((e) => e.g);
+    const merged = bodyGeos.length > 0 ? mergeGeometries(bodyGeos, false) : null;
     if (!merged) return;
-    // normaliza: 10m de altura, centrado, base em y=0
+    const mergedGlass = glassGeos.length > 0 ? mergeGeometries(glassGeos, false) : null;
+    // normaliza: 10m de altura, centrado, base em y=0 (mesma matriz pros dois)
     merged.computeBoundingBox();
     const bb = merged.boundingBox!;
     const size = bb.getSize(new THREE.Vector3());
@@ -1570,7 +1602,12 @@ const towerBox = new THREE.Box3();
     merged.scale(s, s, s);
     merged.computeBoundingBox();
     const b2 = merged.boundingBox!;
-    merged.translate(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -(b2.min.z + b2.max.z) / 2);
+    const tox = -(b2.min.x + b2.max.x) / 2, toy = -b2.min.y, toz = -(b2.min.z + b2.max.z) / 2;
+    merged.translate(tox, toy, toz);
+    if (mergedGlass) {
+      mergedGlass.scale(s, s, s);
+      mergedGlass.translate(tox, toy, toz);
+    }
     // direção do braço: centroide do topo menos o da base
     const pos = merged.getAttribute('position') as THREE.BufferAttribute;
     let tx = 0, tz = 0, tn = 0, bx = 0, bz = 0, bn = 0;
@@ -1584,23 +1621,26 @@ const towerBox = new THREE.Box3();
     const dz = tz / Math.max(1, tn) - bz / Math.max(1, bn);
     const len = Math.hypot(dx, dz) || 1;
     this.lampHead.set(dx / len, dz / len);
-    // centróide dos vértices de vidro = posição do bulbo (local, pós-normalizar)
-    {
-      const col = merged.getAttribute('color') as THREE.BufferAttribute;
-      let ax = 0, ay = 0, az = 0, an = 0;
-      for (let i = 0; i < pos.count; i++) {
-        const cr = col.getX(i), cg = col.getY(i), cb = col.getZ(i);
-        if (Math.abs(cr - 1) < 0.06 && Math.abs(cg - 0.886) < 0.06 && Math.abs(cb - 0.659) < 0.06) {
-          ax += pos.getX(i); ay += pos.getY(i); az += pos.getZ(i); an++;
-        }
-      }
-      if (an > 0) this.lampBulb.set(ax / an, ay / an, az / an);
-      else this.lampBulb.set(0, 9.2, 0);
+    // centróide do vidro = posição do bulbo (local, pós-normalizar)
+    if (mergedGlass) {
+      const gp = mergedGlass.getAttribute('position') as THREE.BufferAttribute;
+      let ax = 0, ay = 0, az = 0;
+      for (let i = 0; i < gp.count; i++) { ax += gp.getX(i); ay += gp.getY(i); az += gp.getZ(i); }
+      this.lampBulb.set(ax / gp.count, ay / gp.count, az / gp.count);
+    } else {
+      this.lampBulb.set(0, 9.2, 0);
     }
-    const mesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    mesh.castShadow = true;
-    this.lampTemplate = mesh;
-    console.log(`[lamp] poste carregado: ${pos.count} verts, braço=(${this.lampHead.x.toFixed(2)},${this.lampHead.y.toFixed(2)})`);
+    const tpl = new THREE.Group();
+    const bodyMesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    bodyMesh.castShadow = true;
+    tpl.add(bodyMesh);
+    if (mergedGlass) {
+      this.lampGlassMat = new THREE.MeshLambertMaterial({ color: 0xffe2a8 });
+      const glassMesh = new THREE.Mesh(mergedGlass, this.lampGlassMat);
+      tpl.add(glassMesh);
+    }
+    this.lampTemplate = tpl;
+    console.log(`[lamp] poste carregado: ${pos.count} verts, vidro=${mergedGlass ? mergedGlass.getAttribute('position').count : 0}, braço=(${this.lampHead.x.toFixed(2)},${this.lampHead.y.toFixed(2)})`);
   }
 
   /** Carrega o R8, funde as 168 partes em 1 geometria (cor por vértice) e troca

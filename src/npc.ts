@@ -529,28 +529,19 @@ export class NPCFactory {
     await NPCFactory.fightsLoading;
   }
 
-  /** Toca a anim certa do estado (só walkers; Golpe sorteia chute/soco). */
+  /** Walkers: só o walk (do próprio modelo). As lutas são do hunter (outro
+   *  esqueleto/proporção: no walker ficam tortas). Resto congela parado. */
   playForState(npc: NPCPhysics): void {
     const mixer = npc.mixer;
     if (!mixer) return;
-    const C = NPCFactory.walkerClips;
-    let clip: THREE.AnimationClip | null = null;
-    let loop = true;
-    switch (npc.state) {
-      case 'walk': clip = NPCFactory.walkerClip; break;
-      case 'fallen': case 'stunned': clip = C['slip'] ?? null; break;
-      case 'getup': clip = C['getup'] ?? null; loop = false; break;
-      case 'revenge': clip = C['run'] ?? NPCFactory.walkerClip; break;
-      case 'attack': clip = (Math.random() < 0.7 ? C['kick'] : C['punch']) ?? null; loop = false; break;
-      case 'stare': clip = C['pose'] ?? null; break;
-      default: return;
+    if (npc.state === 'walk' || npc.state === 'revenge') {
+      const clip = NPCFactory.walkerClip;
+      if (!clip) return;
+      mixer.stopAllAction();
+      mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
+    } else {
+      mixer.stopAllAction();
     }
-    if (!clip) return;
-    mixer.stopAllAction();
-    const a = mixer.clipAction(clip);
-    if (loop) a.setLoop(THREE.LoopRepeat, Infinity);
-    else { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
-    a.play();
   }
 
   /** Walker (clone com esqueleto próprio). Fallback = procedural. */
@@ -674,16 +665,10 @@ export class NPCFactory {
     if (npc.sayT > 0) npc.sayT = Math.max(0, npc.sayT - dt);
   }
 
-  /** Avança a animação (congela: segurado/lançado/canhão/levitando/apagado). */
+  /** Avança o walk (só andando/perseguindo; resto congelado). */
   tickAnim(npc: NPCPhysics, dt: number): void {
     if (!npc.mixer || npc.outCold) return;
-    switch (npc.state) {
-      case 'walk': case 'fallen': case 'stunned':
-      case 'getup': case 'revenge': case 'attack': case 'stare':
-        npc.mixer.update(dt);
-        break;
-      default: break;
-    }
+    if (npc.state === 'walk' || npc.state === 'revenge') npc.mixer.update(dt);
   }
 
   syncMesh(npc: NPCPhysics) {

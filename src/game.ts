@@ -21,6 +21,13 @@ import { isMuted, playSfx, resumeAudio, toggleMute } from './sound';
 /** Hash do commit injetado no build (vite.config). */
 declare const __COMMIT__: string;
 
+/** Cores do ciclo dia/noite (sem alocar por frame). */
+const MOON_COL = new THREE.Color(0x8fa8ff);
+const SUN_COL = new THREE.Color(0xfff2dd);
+const SET_COL = new THREE.Color(0xff9448);
+const FOG_DAY = new THREE.Color(0x87ceeb);
+const FOG_NIGHT = new THREE.Color(0x0a1226);
+
 export class Game {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
@@ -43,6 +50,14 @@ export class Game {
   private sunLight: THREE.DirectionalLight | null = null;
   /** Cúpula do céu (gradiente + sol): segue a câmera, 1 draw call. */
   private skyDome: THREE.Mesh | null = null;
+  private skyMat: THREE.ShaderMaterial | null = null;
+  private hemiLight: THREE.HemisphereLight | null = null;
+  private ambLight: THREE.AmbientLight | null = null;
+  /** Relógio do ciclo dia/noite (0 = 6h; volta completa em 6 min). */
+  private dayT = 0.075;
+  private static readonly DAY_LEN = 360;
+  private dayNightTmp = new THREE.Color();
+  private lastClock = '';
   private menuCamT = 0;
   private chaos = 0;
   private carrying: NPCPhysics | null = null;
@@ -144,7 +159,8 @@ constructor() {}
     document.body.appendChild(this.renderer.domElement);
     this.initParticles();
 
-    this.scene.add(new THREE.AmbientLight(0x606080, 0.6));
+    this.ambLight = new THREE.AmbientLight(0x606080, 0.6);
+    this.scene.add(this.ambLight);
     const dl = new THREE.DirectionalLight(0xffdfb0, 1.25);
     dl.position.set(50, 21, 30);
     dl.castShadow = true;
@@ -164,7 +180,8 @@ constructor() {}
     dl.shadow.camera.updateProjectionMatrix();
     this.scene.add(dl);
     this.scene.add(dl.target);
-    this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4));
+    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4);
+    this.scene.add(this.hemiLight);
     this.sunLight = dl;
     // Sol + atmosfera: cúpula com gradiente (zênite->horizonte), disco solar e
     // halo alinhados com a luz de verdade (mesma direção do updateSun).
@@ -176,21 +193,34 @@ constructor() {}
         side: THREE.BackSide,
         depthWrite: false,
         fog: false,
-        uniforms: { sunDir: { value: sunDir } },
+        uniforms: { sunDir: { value: sunDir }, nightF: { value: 0 } },
         vertexShader: 'varying vec3 vDir; void main() { vDir = normalize(position);'
           + ' gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
         fragmentShader: [
-          'varying vec3 vDir; uniform vec3 sunDir;',
+          'varying vec3 vDir; uniform vec3 sunDir; uniform float nightF;',
           'void main() {',
-          '  float h = clamp(vDir.y, -1.0, 1.0);',
-          '  vec3 zen = vec3(0.20, 0.45, 0.85);',
-          '  vec3 hor = vec3(0.78, 0.88, 0.95);',
+          '  vec3 nd = normalize(vDir);',
+          '  float h = clamp(nd.y, -1.0, 1.0);',
+          '  float dayF = 1.0 - nightF;',
+          '  vec3 zen = mix(vec3(0.008, 0.02, 0.07), vec3(0.20, 0.45, 0.85), dayF);',
+          '  vec3 hor = mix(vec3(0.04, 0.07, 0.16), vec3(0.78, 0.88, 0.95), dayF);',
           '  vec3 col = mix(hor, zen, smoothstep(0.0, 0.6, h));',
-          '  col = mix(vec3(0.35, 0.55, 0.75), col, smoothstep(-0.15, 0.02, h));',
-          '  float s = max(dot(normalize(vDir), normalize(sunDir)), 0.0);',
-          '  col += vec3(1.0, 0.95, 0.85) * smoothstep(0.9993, 0.9997, s) * 4.0;',
-          '  col += vec3(1.0, 0.85, 0.6) * pow(s, 350.0) * 0.6;',
-          '  col += vec3(1.0, 0.9, 0.7) * pow(s, 8.0) * 0.12;',
+          '  vec3 seam = mix(vec3(0.028, 0.049, 0.112), vec3(0.35, 0.55, 0.75), dayF);',
+          '  col = mix(seam, col, smoothstep(-0.15, 0.02, h));',
+          '  vec3 sd = normalize(sunDir);',
+          '  float s = max(dot(nd, sd), 0.0);',
+          '  float elev = abs(sd.y);',
+          '  col += vec3(1.0, 0.5, 0.25) * pow(s, 6.0) * dayF * smoothstep(0.4, 0.0, elev);',
+          '  col += vec3(1.0, 0.95, 0.85) * smoothstep(0.9993, 0.9997, s) * 4.0 * dayF;',
+          '  col += vec3(1.0, 0.85, 0.6) * pow(s, 350.0) * 0.6 * dayF;',
+          '  col += vec3(1.0, 0.9, 0.7) * pow(s, 8.0) * 0.12 * dayF;',
+          '  vec3 md = -sd;',
+          '  float m = max(dot(nd, md), 0.0);',
+          '  col += vec3(0.85, 0.9, 1.0) * smoothstep(0.99965, 0.99985, m) * 1.6 * nightF;',
+          '  col += vec3(0.5, 0.6, 0.9) * pow(m, 900.0) * 0.35 * nightF;',
+          '  vec3 cell = floor(nd * 220.0);',
+          '  float hs = fract(sin(dot(cell, vec3(12.9898, 78.233, 45.164))) * 43758.5453);',
+          '  col += vec3(0.9, 0.93, 1.0) * step(0.9985, hs) * nightF * smoothstep(0.02, 0.25, h);',
           '  gl_FragColor = vec4(col, 1.0);',
           '}',
         ].join('\n'),
@@ -199,6 +229,7 @@ constructor() {}
       sky.frustumCulled = false;
       this.scene.add(sky);
       this.skyDome = sky;
+      this.skyMat = skyMat;
     }
     this.applyQuality();
 
@@ -455,7 +486,7 @@ constructor() {}
     hud.id = 'hud';
     hud.style.display = 'none';
     hud.innerHTML = `
-      <div>🪙 DINCOW: <span id="score">0</span> <span id="padstat"></span></div>
+      <div>🪙 DINCOW: <span id="score">0</span> <span id="padstat"></span> <span id="dayphase">☀ 07:48</span></div>
       <div>Caos: <div id="chaos-bar"><div id="chaos-fill"></div></div> <span id="chaos-pct">0%</span></div>
       <div id="carry-status"></div>
       <div id="gadget-status"></div>
@@ -1944,7 +1975,7 @@ constructor() {}
     }
     this.updateParticles();
     this.updateCamera();
-    this.updateSun();
+    this.updateSun(dt);
     // HUD a 10Hz: o innerHTML das missões/placar e as varreduras de NPC por
     // frame custavam caro à toa (nada visível muda em <100ms).
     this.hudAcc += dt;
@@ -1955,13 +1986,44 @@ constructor() {}
   }
 
   /** O sol (e sua câmera de sombra de 90m) acompanha a vaca todo frame. */
-  private updateSun() {
+  /** Ciclo dia/noite: o sol gira (lua no oposto), céu/neblina/luz acompanham. */
+  private updateSun(dt: number) {
     const dl = this.sunLight;
     if (!dl) return;
+    this.dayT = (this.dayT + dt / Game.DAY_LEN) % 1;
+    const th = this.dayT * Math.PI * 2;
+    const ex = Math.cos(th) * 70, ey = Math.sin(th) * 70, ez = 30;
+    const e = Math.sin(th); // altura do sol (-1..1)
+    const dayF = Math.max(0, Math.min(1, (e + 0.06) / 0.21)); // 0 noite, 1 dia
     const t = this.cow.group.position;
-    dl.position.set(t.x + 50, t.y + 21, t.z + 30);
+    if (e > -0.02) dl.position.set(t.x + ex, t.y + Math.max(4, ey), t.z + ez);
+    else dl.position.set(t.x - ex, t.y + Math.max(4, -ey), t.z - ez); // lua
     dl.target.position.set(t.x, t.y, t.z);
     dl.target.updateMatrixWorld();
+    // cor: sol branco->laranja no horizonte; lua azul fraca
+    const k = Math.max(0, Math.min(1, 1 - Math.max(0, e) * 2.5));
+    this.dayNightTmp.copy(SUN_COL).lerp(SET_COL, k).lerp(MOON_COL, 1 - dayF);
+    dl.color.copy(this.dayNightTmp);
+    dl.intensity = 0.18 + 1.07 * dayF;
+    if (this.hemiLight) this.hemiLight.intensity = 0.06 + 0.34 * dayF;
+    if (this.ambLight) this.ambLight.intensity = 0.12 + 0.48 * dayF;
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) fog.color.copy(FOG_NIGHT).lerp(FOG_DAY, dayF);
+    // reflexos do ambiente também anoitecem (senão a vaca fica acesa à noite)
+    this.scene.environmentIntensity = 0.08 + 0.92 * dayF;
+    if (this.skyMat) {
+      (this.skyMat.uniforms['sunDir'] as THREE.IUniform).value.set(ex, ey, ez).normalize();
+      (this.skyMat.uniforms['nightF'] as THREE.IUniform).value = 1 - dayF;
+    }
+    // relógio no HUD (só quando muda o minuto)
+    const mins = Math.floor(((6 + this.dayT * 24) % 24) * 60);
+    const txt = `${dayF > 0.6 ? '☀' : dayF > 0.25 ? '🌇' : '🌙'} `
+      + `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+    if (txt !== this.lastClock) {
+      this.lastClock = txt;
+      const el = document.getElementById('dayphase');
+      if (el) el.textContent = txt;
+    }
     // a cúpula acompanha a câmera (o sol fica parado no céu)
     if (this.skyDome) this.skyDome.position.copy(this.camera.position);
   }

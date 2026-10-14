@@ -405,6 +405,7 @@ constructor() {}
     await this.npcFactory.preload();
     await this.npcFactory.preloadZane();
     await this.npcFactory.preloadWalker();
+    await this.npcFactory.preloadFights();
     const placeNPC = (x: number, z: number, kind?: 'goat') => {
       const n = this.npcFactory.create(this.scene, this.physics, x, z, kind);
       // sem sombra (são pequenos; economiza 1 passe inteiro no shadow map)
@@ -1268,9 +1269,25 @@ constructor() {}
     this.showMessage('Soltou!');
   }
 
+  /** Vingança: cabeçada conta; 5x apaga pra sempre, senão cai>levanta>corre>chuta>encara. */
+  private registerHit(n: NPCPhysics): void {
+    if (n.vendor || n.outCold) return;
+    n.hits++;
+    n.revenge = true;
+    if (n.hits >= 5) {
+      n.outCold = true;
+      this.setNPCState(n, 'fallen');
+      n.stateTimer = 9999;
+      return;
+    }
+    this.setNPCState(n, 'fallen');
+    n.stateTimer = 2.5;
+  }
+
   private setNPCState(npc: NPCPhysics, state: NPCPhysics['state'], timer = 0) {
     npc.state = state;
     npc.stateTimer = timer;
+    this.npcFactory.playForState(npc);
     // dentro do canhao some (em vez de ficar andando em cima do tubo)
     npc.mesh.visible = state !== 'inCannon';
     // carregando/no canhao vira sensor: nao engancha nas paredes nem empurra a vaca
@@ -1324,14 +1341,13 @@ constructor() {}
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
     for (const n of this.npcs) {
-      if (n.state !== 'walk' || n.vendor) continue;
+      if ((n.state !== 'walk' && n.state !== 'stare' && n.state !== 'revenge' && n.state !== 'attack') || n.vendor) continue;
       const t = n.body.translation();
       const dx = t.x - cx;
       const dz = t.z - cz;
       const d = Math.hypot(dx, dz);
       if (d < 5) {
-        this.setNPCState(n, 'stunned');
-        n.stateTimer = 5;
+        this.registerHit(n);
         this.npcFactory.complain(n);
         const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(170);
         n.body.applyImpulse({ x: push.x, y: 120, z: push.z }, true);
@@ -1404,7 +1420,12 @@ constructor() {}
     const t = body.translation();
 
     const inWater = !this.onBridge(t.x, t.z) && !this.world.isOnIsland(t.x, t.z, -2);
-    if (move.length() > 0) {
+    if (this.cow.stunT > 0) {
+      // atordoada (chute!): desliza sem controle e quase sem freio
+      this.cow.stunT -= dt;
+      const f = Math.max(0, 1 - dt * 1.5);
+      body.setLinvel({ x: currentVel.x * f, y: currentVel.y, z: currentVel.z * f }, true);
+    } else if (move.length() > 0) {
       // normaliza só se passar de 1 (preserva a força do joystick analógico)
       if (move.length() > 1) move.normalize();
       move.multiplyScalar(speed);
@@ -1616,13 +1637,92 @@ constructor() {}
         }
         case 'stunned':
         case 'fallen': {
+          if (n.outCold) break; // 5 cabeçadas: chão pra sempre
+          if (n.stateTimer > 0) {
+            n.stateTimer -= dt;
+            if (n.stateTimer <= 0) {
+              if (n.revenge) {
+                this.setNPCState(n, 'getup');
+                n.stateTimer = 1.2;
+              } else {
+                this.setNPCState(n, 'walk');
+              }
+              if (!n.vendor) this.pickNPCDestination(n);
+              n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+              n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+            }
+          }
+          break;
+        }
+        case 'getup': {
+          // levantando (Standing Up 1x): parado, depois corre pra cima da vaca
+          n.body.setLinvel({ x: 0, y: n.body.linvel().y, z: 0 }, true);
+          if (n.stateTimer > 0) {
+            n.stateTimer -= dt;
+            if (n.stateTimer <= 0) this.setNPCState(n, 'revenge');
+          } else {
+            this.setNPCState(n, 'revenge');
+          }
+          break;
+        }
+        case 'revenge': {
+          // corre até a vaca (Running) e chuta quando chega perto
+          const cwx = this.cow.group.position.x;
+          const cwz = this.cow.group.position.z;
+          const rdx = cwx - t.x;
+          const rdz = cwz - t.z;
+          const rd = Math.hypot(rdx, rdz) || 1;
+          n.mesh.rotation.y = Math.atan2(rdx, rdz);
+          if (rd < 3.2) {
+            this.setNPCState(n, 'attack');
+            n.stateTimer = 1.1;
+            const cv = this.cow.body.linvel();
+            this.cow.body.setLinvel({
+              x: (rdx / rd) * 10 + cv.x * 0.3,
+              y: Math.max(cv.y, 3.5),
+              z: (rdz / rd) * 10 + cv.z * 0.3,
+            }, true);
+            this.cow.stunT = 0.9;
+            this.npcFactory.complain(n);
+            playSfx('thud');
+            this.chaos = Math.min(100, this.chaos + 3);
+            this.showMessage('CHUTE!');
+            this.spawnParticles(cwx, t.y + 1, cwz, 8, 0xff8830);
+            this.input.rumble(1, 0.5, 200);
+          } else {
+            const v = n.body.linvel();
+            n.body.setLinvel({ x: (rdx / rd) * 8, y: v.y, z: (rdz / rd) * 8 }, true);
+          }
+          break;
+        }
+        case 'attack': {
+          // chutando/soca (1x): cravado no lugar, depois encara
+          const v = n.body.linvel();
+          n.body.setLinvel({ x: 0, y: v.y, z: 0 }, true);
+          if (n.stateTimer > 0) {
+            n.stateTimer -= dt;
+            if (n.stateTimer <= 0) {
+              this.setNPCState(n, 'stare');
+              n.stateTimer = 8;
+            }
+          } else {
+            this.setNPCState(n, 'stare');
+            n.stateTimer = 8;
+          }
+          break;
+        }
+        case 'stare': {
+          // parado encarando a vaca (pose), depois volta a andar
+          const cwx = this.cow.group.position.x;
+          const cwz = this.cow.group.position.z;
+          n.mesh.rotation.y = Math.atan2(cwx - t.x, cwz - t.z);
+          const v = n.body.linvel();
+          n.body.setLinvel({ x: 0, y: v.y, z: 0 }, true);
           if (n.stateTimer > 0) {
             n.stateTimer -= dt;
             if (n.stateTimer <= 0) {
               this.setNPCState(n, 'walk');
               if (!n.vendor) this.pickNPCDestination(n);
-              n.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-              n.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
             }
           }
           break;

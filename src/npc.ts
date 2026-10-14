@@ -7,7 +7,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { playSfx, speakComplaint } from './sound';
 
-export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate';
+export type NPCState = 'walk' | 'fallen' | 'stunned' | 'carried' | 'launched' | 'inCannon' | 'levitate'
+  | 'getup' | 'revenge' | 'attack' | 'stare';
 
 export interface NPCPhysics {
   id: number;
@@ -24,6 +25,10 @@ export interface NPCPhysics {
   tz: number;
   /** mixer da animação de andar (só walkers; congela se não está andando) */
   mixer?: THREE.AnimationMixer | null;
+  /** vingança: quantas cabeçadas levou + se apagou de vez + se vai revidar */
+  hits: number;
+  outCold: boolean;
+  revenge: boolean;
   /** levitação da bíblia: timer de faísca */
   levT: number;
   /** cooldown de reclamação em voz (0 = pode reclamar) */
@@ -65,6 +70,20 @@ export class NPCFactory {
   private static walkerTemplate: THREE.Group | null = null;
   private static walkerLoading: Promise<void> | null = null;
   private static walkerClip: THREE.AnimationClip | null = null;
+  /** Socos/chutes (só walkers, mesmo esqueleto): run/slip/getup/pose/kick/punch. */
+  private static walkerClips: Record<string, THREE.AnimationClip> = {};
+  private static fightsLoading: Promise<void> | null = null;
+
+  /** Congela X/Z do quadril/raiz (anda no lugar; o corpo físico move). */
+  private static stripRootMotion(clip: THREE.AnimationClip): void {
+    for (const track of clip.tracks) {
+      if (/hips|root/i.test(track.name) && track.name.endsWith('.position')) {
+        const vals = (track as THREE.VectorKeyframeTrack).values;
+        const fx = vals[0]!, fz = vals[2]!;
+        for (let i = 0; i < vals.length; i += 3) { vals[i] = fx; vals[i + 2] = fz; }
+      }
+    }
+  }
   // 1 material pra TODOS os procedurais (cor vai por vértice) = poucas trocas de estado
   private static sharedVertexMat: THREE.MeshLambertMaterial | null = null;
 
@@ -124,6 +143,9 @@ export class NPCFactory {
       levT: 0,
       sayT: 0,
       skinSeat: { shirt, skin, hair, pants },
+      hits: 0,
+      outCold: false,
+      revenge: false,
     };
     // walker com animação: mixer próprio, clipe em loop (só anda no 'walk')
     if (useWalker && NPCFactory.walkerClip) {
@@ -468,20 +490,67 @@ export class NPCFactory {
     wrap.updateMatrixWorld(true);
     const clips = model.animations ?? [];
     const clip = clips.length > 0 ? clips[0]! : null;
-    // sem root motion: o quadril do Mixamo translada e o loop dá tranco pra
-    // trás; congela X/Z (anda no lugar, o corpo físico move). Y balança ok.
-    if (clip) {
-      for (const track of clip.tracks) {
-        if (/hips|root/i.test(track.name) && track.name.endsWith('.position')) {
-          const vals = (track as THREE.VectorKeyframeTrack).values;
-          const fx = vals[0]!, fz = vals[2]!;
-          for (let i = 0; i < vals.length; i += 3) { vals[i] = fx; vals[i + 2] = fz; }
-        }
-      }
-    }
+    if (clip) NPCFactory.stripRootMotion(clip);
     NPCFactory.walkerClip = clip;
     console.log(`[npc] walker: ${meshes} meshes, altura ${(h * s).toFixed(2)}m, anims=${clips.map((c) => `${c.name}:${c.duration.toFixed(2)}s`).join(',') || 'nenhuma'}`);
     NPCFactory.walkerTemplate = wrap;
+  }
+
+  /** Pré-carrega socos/chutes/corrida (1MB cada, em paralelo). */
+  async preloadFights(): Promise<void> {
+    if (NPCFactory.walkerClips['run'] || NPCFactory.fightsLoading) {
+      if (NPCFactory.fightsLoading) await NPCFactory.fightsLoading;
+      return;
+    }
+    NPCFactory.fightsLoading = (async () => {
+      const files: Record<string, string> = {
+        run: 'running2.fbx', slip: 'slipping.fbx', getup: 'standing_up.fbx',
+        pose: 'male_standing_pose.fbx', kick: 'flip_kick.fbx', punch: 'punch_combo.fbx',
+        walk2: 'walking2.fbx',
+      };
+      const loader = new FBXLoader();
+      await Promise.all(Object.entries(files).map(async ([name, file]) => {
+        try {
+          const m = await loader.loadAsync(`models/npc/${file}`);
+          const clip = m.animations[0];
+          if (!clip) return;
+          // loops andam no lugar (chute/soco/levanta mantêm o avanço: é 1x só)
+          if (name === 'run' || name === 'slip' || name === 'walk2') {
+            NPCFactory.stripRootMotion(clip);
+          }
+          NPCFactory.walkerClips[name] = clip;
+        } catch (err) {
+          console.warn(`Anim ${file} nao carregou:`, err);
+        }
+      }));
+      const sample = NPCFactory.walkerClips['run']?.tracks[0]?.name ?? '?';
+      console.log(`[npc] lutas: ${Object.keys(NPCFactory.walkerClips).join(',')} (trilha ex: ${sample})`);
+    })();
+    await NPCFactory.fightsLoading;
+  }
+
+  /** Toca a anim certa do estado (só walkers; Golpe sorteia chute/soco). */
+  playForState(npc: NPCPhysics): void {
+    const mixer = npc.mixer;
+    if (!mixer) return;
+    const C = NPCFactory.walkerClips;
+    let clip: THREE.AnimationClip | null = null;
+    let loop = true;
+    switch (npc.state) {
+      case 'walk': clip = NPCFactory.walkerClip; break;
+      case 'fallen': case 'stunned': clip = C['slip'] ?? null; break;
+      case 'getup': clip = C['getup'] ?? null; loop = false; break;
+      case 'revenge': clip = C['run'] ?? NPCFactory.walkerClip; break;
+      case 'attack': clip = (Math.random() < 0.7 ? C['kick'] : C['punch']) ?? null; loop = false; break;
+      case 'stare': clip = C['pose'] ?? null; break;
+      default: return;
+    }
+    if (!clip) return;
+    mixer.stopAllAction();
+    const a = mixer.clipAction(clip);
+    if (loop) a.setLoop(THREE.LoopRepeat, Infinity);
+    else { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+    a.play();
   }
 
   /** Walker (clone com esqueleto próprio). Fallback = procedural. */
@@ -605,9 +674,16 @@ export class NPCFactory {
     if (npc.sayT > 0) npc.sayT = Math.max(0, npc.sayT - dt);
   }
 
-  /** Avança a animação de andar (só andando; segurado/caído congela). */
+  /** Avança a animação (congela: segurado/lançado/canhão/levitando/apagado). */
   tickAnim(npc: NPCPhysics, dt: number): void {
-    if (npc.mixer && npc.state === 'walk') npc.mixer.update(dt);
+    if (!npc.mixer || npc.outCold) return;
+    switch (npc.state) {
+      case 'walk': case 'fallen': case 'stunned':
+      case 'getup': case 'revenge': case 'attack': case 'stare':
+        npc.mixer.update(dt);
+        break;
+      default: break;
+    }
   }
 
   syncMesh(npc: NPCPhysics) {

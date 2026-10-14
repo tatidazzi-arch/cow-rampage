@@ -53,6 +53,9 @@ export class Game {
   private skyMat: THREE.ShaderMaterial | null = null;
   private hemiLight: THREE.HemisphereLight | null = null;
   private ambLight: THREE.AmbientLight | null = null;
+  /** 3 postes de verdade (PointLights nos bulbos mais próximos, só à noite). */
+  private lampLights: THREE.PointLight[] = [];
+  private lampScanT = 0;
   /** Relógio do ciclo dia/noite (0 = 6h; volta completa em 6 min). */
   private dayT = 0.075;
   private static readonly DAY_LEN = 360;
@@ -182,6 +185,11 @@ constructor() {}
     this.scene.add(dl.target);
     this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x445522, 0.4);
     this.scene.add(this.hemiLight);
+    for (let i = 0; i < 3; i++) {
+      const pl = new THREE.PointLight(0xffc873, 0, 70, 1.8);
+      this.scene.add(pl);
+      this.lampLights.push(pl);
+    }
     this.sunLight = dl;
     // Sol + atmosfera: cúpula com gradiente (zênite->horizonte), disco solar e
     // halo alinhados com a luz de verdade (mesma direção do updateSun).
@@ -2009,6 +2017,31 @@ constructor() {}
     if (this.ambLight) this.ambLight.intensity = 0.12 + 0.48 * dayF;
     const fog = this.scene.fog as THREE.Fog | null;
     if (fog) fog.color.copy(FOG_NIGHT).lerp(FOG_DAY, dayF);
+    // postes + janelas: 3 luzes nos bulbos mais próximos, vidros acesos
+    const nightF = 1 - dayF;
+    this.world.applyNight(nightF);
+    this.lampScanT -= dt;
+    if (this.lampScanT <= 0) {
+      this.lampScanT = 0.3;
+      const bulbs = this.world.lampBulbs;
+      const ranked = bulbs
+        .map((b) => ({ b, d: Math.abs(b.x - t.x) + Math.abs(b.z - t.z) }))
+        .sort((a, c) => a.d - c.d)
+        .slice(0, this.lampLights.length);
+      this.lampLights.forEach((pl, i) => {
+        const hit = ranked[i];
+        if (hit && nightF > 0.02) {
+          pl.position.set(hit.b.x, hit.b.y, hit.b.z);
+          pl.intensity = 1500 * nightF;
+        } else {
+          pl.intensity = 0;
+        }
+      });
+    } else {
+      for (const pl of this.lampLights) {
+        if (pl.intensity > 0) pl.intensity = 1500 * nightF;
+      }
+    }
     // reflexos do ambiente também anoitecem (senão a vaca fica acesa à noite)
     this.scene.environmentIntensity = 0.08 + 0.92 * dayF;
     if (this.skyMat) {

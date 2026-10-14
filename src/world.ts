@@ -270,6 +270,14 @@ export class World {
     this.props.push({ name, x, z });
   }
 
+  /** Noite: vidros das torres acesos (quente) — 0 de dia. */
+  applyNight(nightF: number): void {
+    for (const g of this.towerGlassMats) {
+      g.mat.emissive.setHex(0xffbf6a);
+      g.mat.emissiveIntensity = nightF * g.glow;
+    }
+  }
+
   private buildGround(): RAPIER.RigidBody {
     // agua ao redor
     const water = new THREE.Mesh(
@@ -622,6 +630,15 @@ const towerBox = new THREE.Box3();
         m.material = mats.length > 1 ? mats : mats[0]!;
         meshCount++;
         groupNames.push(names.join('+'));
+        // vidros que acendem à noite (alguns escuros: 20% fica apagado)
+        names.forEach((n, ni) => {
+          if (/glass|mirror/i.test(n)) {
+            const mm = mats[ni] as THREE.MeshLambertMaterial;
+            if (mm && !this.towerGlassMats.some((g) => g.mat === mm)) {
+              this.towerGlassMats.push({ mat: mm, glow: worldRand() < 0.2 ? 0 : 0.5 + worldRand() * 0.5 });
+            }
+          }
+        });
         // bbox por grupo de material (placas de chão/rua não entram no collider)
         const gp = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
         const gi = m.geometry.index;
@@ -1429,7 +1446,11 @@ const towerBox = new THREE.Box3();
   }
 
   /** Postes da avenida (streetlamp.fbx): 1 mesh fundido, clones nas calçadas. */
+  /** Vidros das torres (acesos à noite) + bulbos dos postes (luz de verdade). */
+  private towerGlassMats: { mat: THREE.MeshLambertMaterial; glow: number }[] = [];
+  lampBulbs: { x: number; y: number; z: number }[] = [];
   private lampTemplate: THREE.Mesh | null = null;
+  private lampBulb = new THREE.Vector3(0, 9.2, 0); // bulbo no espaço do modelo
   private lampHead = new THREE.Vector2(1, 0); // direção do braço no espaço do modelo (x, z)
   private lampLoading: Promise<void> | null = null;
 
@@ -1472,17 +1493,39 @@ const towerBox = new THREE.Box3();
       await this.lampLoading;
     }
     if (!this.lampTemplate) return;
-    for (const p of spots) {
-      const gy = this.groundHeight(p.x, p.z);
-      const yaw = Math.atan2(p.tx, p.tz) - Math.atan2(this.lampHead.x, this.lampHead.y);
-      const lamp = this.lampTemplate.clone();
-      lamp.position.set(p.x, gy, p.z);
-      lamp.rotation.y = yaw;
-      this.scene.add(lamp);
-      const body = this.fixedBody(p.x, p.z);
-      this.world.createCollider(
-        RAPIER.ColliderDesc.cylinder(5, 0.18).setTranslation(0, gy + 5, 0), body);
-      this.logProp('lamp', p.x, p.z);
+    const bulbMats: THREE.Matrix4[] = [];
+    {
+      const m4 = new THREE.Matrix4();
+      const off = new THREE.Vector3();
+      for (const p of spots) {
+        const gy = this.groundHeight(p.x, p.z);
+        const yaw = Math.atan2(p.tx, p.tz) - Math.atan2(this.lampHead.x, this.lampHead.y);
+        const lamp = this.lampTemplate.clone();
+        lamp.position.set(p.x, gy, p.z);
+        lamp.rotation.y = yaw;
+        this.scene.add(lamp);
+        const body = this.fixedBody(p.x, p.z);
+        this.world.createCollider(
+          RAPIER.ColliderDesc.cylinder(5, 0.18).setTranslation(0, gy + 5, 0), body);
+        this.logProp('lamp', p.x, p.z);
+        // bulbo no mundo (gira com o poste): luz de verdade + esfera acesa
+        off.copy(this.lampBulb).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        const bx = p.x + off.x, by = gy + off.y, bz = p.z + off.z;
+        this.lampBulbs.push({ x: bx, y: by, z: bz });
+        m4.makeTranslation(bx, by, bz);
+        bulbMats.push(m4.clone());
+      }
+    }
+    // 1 InstancedMesh pros 50+ bulbos (acesos de verdade à noite)
+    if (bulbMats.length > 0) {
+      const bulbs = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(0.28, 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffe2a8 }),
+        bulbMats.length);
+      bulbMats.forEach((mm, idx) => bulbs.setMatrixAt(idx, mm));
+      bulbs.instanceMatrix.needsUpdate = true;
+      bulbs.frustumCulled = false;
+      this.scene.add(bulbs);
     }
   }
 
@@ -1541,6 +1584,19 @@ const towerBox = new THREE.Box3();
     const dz = tz / Math.max(1, tn) - bz / Math.max(1, bn);
     const len = Math.hypot(dx, dz) || 1;
     this.lampHead.set(dx / len, dz / len);
+    // centróide dos vértices de vidro = posição do bulbo (local, pós-normalizar)
+    {
+      const col = merged.getAttribute('color') as THREE.BufferAttribute;
+      let ax = 0, ay = 0, az = 0, an = 0;
+      for (let i = 0; i < pos.count; i++) {
+        const cr = col.getX(i), cg = col.getY(i), cb = col.getZ(i);
+        if (Math.abs(cr - 1) < 0.06 && Math.abs(cg - 0.886) < 0.06 && Math.abs(cb - 0.659) < 0.06) {
+          ax += pos.getX(i); ay += pos.getY(i); az += pos.getZ(i); an++;
+        }
+      }
+      if (an > 0) this.lampBulb.set(ax / an, ay / an, az / an);
+      else this.lampBulb.set(0, 9.2, 0);
+    }
     const mesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
     mesh.castShadow = true;
     this.lampTemplate = mesh;

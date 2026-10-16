@@ -384,10 +384,8 @@ export class World {
         c.multiplyScalar(0.92 + 0.16 * Math.sin(x * 0.11 + z * 0.13));
       } else if (h < 0.5 && m < 0.5) c.setHex(0xd9c27a); // praia (só fora do plano)
       else {
-        // pasto manchado (base funda + manchas grandes: sem neon chapado)
-        c.setHex(0x47852b);
-        const patch = Math.sin(x * 0.017 + 2.1) * Math.sin(z * 0.019 + 0.7);
-        c.multiplyScalar((0.9 + 0.2 * Math.sin(x * 0.05 + z * 0.07)) * (1 + patch * 0.12));
+        c.setHex(0x4a8c2a);
+        c.multiplyScalar(0.9 + 0.2 * Math.sin(x * 0.05 + z * 0.07));
         const rocky = Math.min(1, Math.max(0, (slope - 0.5) * 2) + Math.max(0, h - 30) / 40);
         if (rocky > 0) c.lerp(rock, Math.min(1, rocky));
       }

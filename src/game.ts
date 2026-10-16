@@ -405,7 +405,6 @@ constructor() {}
     await this.npcFactory.preload();
     await this.npcFactory.preloadZane();
     await this.npcFactory.preloadWalker();
-    await this.npcFactory.preloadHunter();
     await this.npcFactory.preloadFights();
     const placeNPC = (x: number, z: number, kind?: 'goat') => {
       const n = this.npcFactory.create(this.scene, this.physics, x, z, kind);

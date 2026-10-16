@@ -5,7 +5,7 @@ const BAD_TOKENS = new Set([
   'cu', 'cuzinho', 'cuzao', 'cuzona', 'cuzo', 'culhao', 'culha',
   'porra', 'caralho', 'puta', 'puto', 'putas', 'putaria',
   'merda', 'bosta', 'foda', 'fodida', 'fode', 'foder', 'fodido', 'fodiba',
-  'pica', 'pinto', 'buceta', 'xota', 'xoxota', 'grelo', 'punheta',
+  'pica', 'pinto', 'pau', 'pal', 'buceta', 'xota', 'xoxota', 'grelo', 'punheta',
   'siririca', 'gozo', 'gozar', 'tesao', 'arrombado', 'arrombada',
   'corno', 'corna', 'cornudo', 'cornuda', 'vadia', 'vadias', 'piranha',
   'prostituta', 'quenga', 'cachorra', 'cadela', 'viado', 'veado',
@@ -21,7 +21,7 @@ const BAD_TOKENS = new Set([
 const BAD_COMPOUNDS = [
   'chupacu', 'chupapica', 'filhodaputa', 'filhadaputa', 'vaiamera',
   'tomanocu', 'enfiaocu', 'suckdick', 'motherfucker',
-  'cunopal', 'cunopau', 'cunozin', 'cuzin',
+  'cunopal', 'cunopau', 'cunozin', 'cuzin', 'paunocu',
 ];
 
 /** Esqueletos de consoante (p/ c4r4lh0, ckrlh0, cr1h0): contém na ordem. */

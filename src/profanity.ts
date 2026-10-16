@@ -54,6 +54,8 @@ export function containsProfanity(text: string): boolean {
     }
   }
   const joined = tokens.join('');
+  // junto exato ("C u" -> "cu"): igual a token proibido, pega
+  if (BAD_TOKENS.has(joined)) return true;
   for (const c of BAD_COMPOUNDS) {
     if (joined.includes(c)) return true;
   }

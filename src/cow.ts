@@ -123,6 +123,45 @@ export class Cow {
     }
     // carrega a bomba de verdade e troca os cilindros (fallback fica se falhar)
     void this.loadNuke(pack, tubes);
+    // sela de couro de verdade no lugar da manta (fallback fica se falhar)
+    void this.loadSaddle(saddle, blanket);
+  }
+
+  /** Sela de couro (saddle.fbx) no lugar da manta: ~2.2m no dorso. */
+  private async loadSaddle(saddle: THREE.Group, fallback: THREE.Mesh): Promise<void> {
+    try {
+      const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
+      const model = await new FBXLoader().loadAsync('models/cow/saddle/saddle.fbx');
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      // eixo comprido ao longo da espinha (+Z); se veio atravessada, gira 90°
+      const inner = new THREE.Group();
+      inner.add(model);
+      if (size.x > size.z) inner.rotation.y = Math.PI / 2;
+      const longest = Math.max(size.x, size.z);
+      // modelo do Tripo vem gigante: 55% do tamanho (sela ~1.2m, não 2.2m)
+      const s = longest > 0 ? (2.2 / longest) * 0.55 : 1;
+      inner.scale.setScalar(s);
+      inner.position.set(-center.x * s, 0, -center.z * s);
+      inner.updateMatrixWorld(true);
+      inner.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) m.castShadow = true;
+      });
+      const bb = new THREE.Box3().setFromObject(inner);
+      // assenta o TERÇO de baixo no dorso (estribos pendem pros lados da
+      // barriga; alinhar pelo mínimo flutua a sela por causa das correias)
+      const third = bb.min.y + (bb.max.y - bb.min.y) * 0.3;
+      inner.position.y = 2.75 - third;
+      inner.position.z += 0.5; // meio do dorso (não na garupa)
+      saddle.add(inner);
+      fallback.visible = false;
+      console.log(`[sela] couro carregado: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);
+    } catch (err) {
+      console.warn('Sela de couro nao carregou, mantendo manta:', err);
+    }
   }
 
   /** Bomba atômica do pack do usuário no lugar dos cilindros. */

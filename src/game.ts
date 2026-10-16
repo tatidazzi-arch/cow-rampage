@@ -17,6 +17,7 @@ import {
 } from './skins';
 import { isTouchDevice, setupTouchControls } from './touch';
 import { isMuted, playSfx, resumeAudio, toggleMute } from './sound';
+import { cleanName } from './profanity';
 
 /** Hash do commit injetado no build (vite.config). */
 declare const __COMMIT__: string;
@@ -924,7 +925,7 @@ constructor() {}
     let html = `<div>Sala: <b>${this.net.roomCode}</b> 🌐${list.length}</div>`;
     html += `<div style="font-size:13px;color:#999">📡 sinal ${dbg.trackersOpen}/${dbg.trackersTotal} · direto ${dbg.peers} · relay ${dbg.relay ? 'sim' : 'não'} · vistos ${dbg.known}</div>`;
     html += list.map((p) =>
-      `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${p.name}${p.me ? ' (você)' : ''}</div>`,
+      `<div style="color:#${p.color.toString(16).padStart(6, '0')}">${cleanName(p.name, 'Vaca')}${p.me ? ' (você)' : ''}</div>`,
     ).join('');
     if (others.length === 0) {
       html += '<div style="color:#ffcc00">🔍 Procurando jogadores...<br>Confira se o código é igual nos dois e aguarde até 1 min.</div>';
@@ -960,11 +961,11 @@ constructor() {}
         let rc = this.remoteCows.get(peerId);
         if (!rc) {
           const prof = this.net.profileOf(peerId);
-          rc = new RemoteCow(this.scene, prof ? prof.name : '?', prof ? prof.color : 0xffffff, prof && typeof prof.skin === 'string' ? prof.skin : 'comum');
+          rc = new RemoteCow(this.scene, prof ? cleanName(prof.name, 'Vaca') : '?', prof ? prof.color : 0xffffff, prof && typeof prof.skin === 'string' ? prof.skin : 'comum');
           rc.group.position.set(s.x, s.y - COW_HALF_H, s.z);
           rc.target.set(s.x, s.y - COW_HALF_H, s.z);
           this.remoteCows.set(peerId, rc);
-          this.showMessage((prof ? prof.name : 'Alguém') + ' entrou! 🐄');
+          this.showMessage((prof ? cleanName(prof.name, 'Alguém') : 'Alguém') + ' entrou! 🐄');
         }
         rc.setState(s);
         const prof2 = this.net.profileOf(peerId);
@@ -980,7 +981,8 @@ constructor() {}
         }
       };
       this.net.onPeers = () => this.renderNetList();
-      this.net.onEvent = (e, fromName) => {
+      this.net.onEvent = (e, rawName) => {
+        const fromName = cleanName(rawName, 'Vaca');
         if (e.type === 'boom') {
           this.spawnParticles(e.x, e.y, e.z, 12, 0xff6600);
           playSfx('boom');

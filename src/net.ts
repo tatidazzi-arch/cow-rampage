@@ -5,6 +5,7 @@ import mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
 import { COW_HALF_H, loadCowAssets, spawnCowModel } from './cowmodel';
 import { skinById, tintCowModel } from './skins';
+import { cleanName } from './profanity';
 
 /** Prefixo dos tópicos/ids no relay e no servidor de sinalização. */
 const APP_PREFIX = 'cowr3';
@@ -185,7 +186,8 @@ export class RemoteCow {
     this.currentClip = name;
   }
 
-  private makeLabel(name: string, color: number): THREE.Sprite {
+  private makeLabel(rawName: string, color: number): THREE.Sprite {
+    const name = cleanName(rawName, 'Vaca');
     const c = document.createElement('canvas');
     c.width = 256;
     c.height = 64;
@@ -334,7 +336,7 @@ export class NetManager {
     await this.leave();
     const gen = ++this.joinGen;
     this.roomCode = code.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'rampage';
-    this.myName = name.trim().slice(0, 12) || 'Jimmy';
+    this.myName = cleanName(name, 'Vaca-' + Math.floor(1000 + Math.random() * 9000));
     this.myColor = color;
     this.myId = `${APP_PREFIX}-${this.roomCode}-${Math.random().toString(36).slice(2, 10)}`;
     this.relayTopic = `${APP_PREFIX}/${this.roomCode}/all`;
@@ -545,7 +547,7 @@ export class NetManager {
     if (w.m.t === 'hello') {
       const prev = this.profiles.get(from);
       this.profiles.set(from, {
-        name: String(w.m.p.name || '?').slice(0, 12),
+        name: cleanName(String(w.m.p.name || '?'), 'Vaca-' + String(from).slice(-4)),
         color: Number(w.m.p.color) || 0xffffff,
         skin: typeof w.m.p.skin === 'string' ? w.m.p.skin : 'comum',
         score: prev ? prev.score : 0,

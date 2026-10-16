@@ -66,6 +66,9 @@ export class NPCFactory {
   // Zane (zane.fbx): template com esqueleto, clonado por NPC (sem barba/pelos)
   private static zaneTemplate: THREE.Group | null = null;
   private static zaneLoading: Promise<void> | null = null;
+  // Hunter (hunter.fbx): o tático de colete (estático, sem esqueleto)
+  private static hunterTemplate: THREE.Group | null = null;
+  private static hunterLoading: Promise<void> | null = null;
   // Walker (walking.fbx): humano com animação de andar, clonado por NPC
   private static walkerTemplate: THREE.Group | null = null;
   private static walkerLoading: Promise<void> | null = null;
@@ -102,7 +105,7 @@ export class NPCFactory {
     const useWalker = npcKind === 'normal' && id % 6 === 3 && NPCFactory.walkerTemplate;
     const mesh = npcKind === 'goat' ? this.buildGoatMesh()
       : npcKind === 'zane' ? this.buildZaneMesh()
-      : npcKind === 'business' ? this.buildBountyMesh()
+      : npcKind === 'business' ? this.buildHunterMesh()
       : useWalker ? this.buildWalkerMesh()
       : this.buildProceduralMesh(shirt, skin, hair, pants);
     mesh.position.set(x, 0, z);
@@ -205,6 +208,73 @@ export class NPCFactory {
       if (std.color) std.color.setHex(tint);
       return c;
     });
+  }
+
+  /** Pré-carrega o hunter (chamar antes de criar NPCs). */
+  async preloadHunter(): Promise<void> {
+    if (NPCFactory.hunterTemplate || NPCFactory.hunterLoading) {
+      if (NPCFactory.hunterLoading) await NPCFactory.hunterLoading;
+      return;
+    }
+    NPCFactory.hunterLoading = this.loadHunter().catch((err) => {
+      console.warn('Modelo hunter nao carregou, usando bounty:', err);
+    });
+    await NPCFactory.hunterLoading;
+  }
+
+  /** Hunter tático (malha estática com materiais originais; sem esqueleto).
+   *  Normaliza: altura 1.85, pés em -0.14, centrado. */
+  private async loadHunter(): Promise<void> {
+    const model = await new FBXLoader().loadAsync('models/npc/hunter.fbx');
+    let meshes = 0;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      meshes++;
+      m.castShadow = false;
+      m.receiveShadow = false;
+      m.frustumCulled = false;
+      // sem textura: tinta tática escura (a cinza crua vira estátua)
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mm of mats) {
+        const c = (mm as THREE.MeshPhongMaterial).color;
+        if (c) c.setHex(0x424a52);
+      }
+    });
+    model.updateMatrixWorld(true);
+    let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) return;
+      const me = m.matrixWorld.elements;
+      for (let i = 0; i < pos.count; i += 4) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const wx = me[0]! * x + me[4]! * y + me[8]! * z + me[12]!;
+        const wy = me[1]! * x + me[5]! * y + me[9]! * z + me[13]!;
+        const wz = me[2]! * x + me[6]! * y + me[10]! * z + me[14]!;
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+        if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
+      }
+    });
+    const h = maxY - minY;
+    const s = h > 0 ? 1.85 / h : 1;
+    const wrap = new THREE.Group();
+    wrap.add(model);
+    wrap.scale.setScalar(s);
+    wrap.position.set(-((minX + maxX) / 2) * s, -0.14 - minY * s, -((minZ + maxZ) / 2) * s);
+    wrap.updateMatrixWorld(true);
+    console.log(`[npc] hunter: ${meshes} meshes, altura ${(h * s).toFixed(2)}m`);
+    NPCFactory.hunterTemplate = wrap;
+  }
+
+  /** Hunter = tático (clone estático); sem modelo, cai pro bounty antigo. */
+  private buildHunterMesh(): THREE.Group {
+    const tpl = NPCFactory.hunterTemplate;
+    if (tpl) return tpl.clone(true);
+    return this.buildBountyMesh();
   }
 
   /** Humanoide = caçador (1 mesh, sem cabelo). Fallback = caixa escura sem cabelo. */

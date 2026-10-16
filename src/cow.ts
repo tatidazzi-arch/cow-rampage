@@ -26,6 +26,8 @@ export class Cow {
   // --- De barriga pra cima (queda de muito alto) ---
   /** > 0 = caída de barriga pra cima (segundos restantes) */
   bellyUpT = 0;
+  /** > 0 = atordoada (chute!): desliza sem controle nem freio */
+  stunT = 0;
   private readonly bellyTotal = 2.2;
   private bellyPhase = 0;
   private bellyAngle = 0;

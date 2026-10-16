@@ -20,6 +20,7 @@ const BAD_TOKENS = new Set([
 const BAD_COMPOUNDS = [
   'chupacu', 'chupapica', 'filhodaputa', 'filhadaputa', 'vaiamera',
   'tomanocu', 'enfiaocu', 'suckdick', 'motherfucker',
+  'cunopal', 'cunopau', 'cunozin', 'cuzin',
 ];
 
 function normalize(s: string): string {

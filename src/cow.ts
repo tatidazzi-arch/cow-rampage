@@ -154,7 +154,7 @@ export class Cow {
       // assenta o TERÇO de baixo no dorso (estribos pendem pros lados da
       // barriga; alinhar pelo mínimo flutua a sela por causa das correias)
       const third = bb.min.y + (bb.max.y - bb.min.y) * 0.3;
-      inner.position.y = 2.45 - third;
+      inner.position.y = 2.05 - third;
       inner.position.z += 0.5; // meio do dorso (não na garupa)
       saddle.add(inner);
       fallback.visible = false;

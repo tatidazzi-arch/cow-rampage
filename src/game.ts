@@ -65,6 +65,8 @@ export class Game {
   private menuCamT = 0;
   private chaos = 0;
   private carrying: NPCPhysics | null = null;
+  /** Carro que a vaca pegou (dirigindo): null = a pé. */
+  private ridingCar: (typeof this.world.cars)[number] | null = null;
   private camDist = 16;
   private camYaw = 0;
   private camPitch = 0.45;
@@ -1154,6 +1156,12 @@ constructor() {}
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
 
+    // dentro do carro: [E] desce
+    if (this.ridingCar) {
+      this.exitCar();
+      return;
+    }
+
     // loja de skins do usuário: abre perto dela (vale carregando ou não)
     if (Math.hypot(this.world.skinShop.x - cx, this.world.skinShop.z - cz) < 7) {
       this.openSkinMenu();
@@ -1186,6 +1194,21 @@ constructor() {}
           bestB.body.setLinvel({ x: 0, y: 2, z: 0 }, true);
           this.spawnParticles(t.x, t.y + 1, t.z, 12, 0xffe97a);
         }
+        return;
+      }
+    }
+
+    // carro colado na vaca: entra nele (tem prioridade sobre pegar NPC)
+    if (!this.carrying) {
+      let nearCar: (typeof this.world.cars)[number] | null = null;
+      // raio generoso: o carro anda 12m/s, a vaca pula pra dentro de longe
+      let carDist = 9;
+      for (const c of this.world.cars) {
+        const d = Math.hypot(c.mesh.position.x - cx, c.mesh.position.z - cz);
+        if (d < carDist) { carDist = d; nearCar = c; }
+      }
+      if (nearCar) {
+        this.enterCar(nearCar);
         return;
       }
     }
@@ -1258,6 +1281,39 @@ constructor() {}
       this.npcFactory.complain(best, 'PUT ME DOWN!!');
       this.showMessage('Pegou! E no canhao!');
     }
+  }
+
+  /** Entra no carro: a vaca vira passageira (some do visual, sem colisão). */
+  private enterCar(car: (typeof this.world.cars)[number]): void {
+    this.ridingCar = car;
+    this.cow.group.visible = false;
+    this.cow.setGhost(true);
+    this.cow.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.showMessage('Entrou no carro! [E] pra descer');
+    playSfx('click');
+  }
+
+  /** Desce do carro (ao lado dele). */
+  private exitCar(): void {
+    const car = this.ridingCar;
+    if (!car) return;
+    this.ridingCar = null;
+    this.cow.group.visible = true;
+    this.cow.setGhost(false);
+    const m = car.mesh;
+    // desce pro lado (perpendicular à direção do carro)
+    const dirX = car.axis === 'z' ? 0 : car.dir;
+    const dirZ = car.axis === 'z' ? car.dir : 0;
+    const sideX = -dirZ;
+    const sideZ = dirX;
+    this.cow.body.setTranslation({
+      x: m.position.x + sideX * 4.5,
+      y: m.position.y + 5,
+      z: m.position.z + sideZ * 4.5,
+    }, true);
+    this.cow.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.showMessage('Desceu do carro!');
+    playSfx('click');
   }
 
   private dropCarried() {
@@ -1816,6 +1872,7 @@ constructor() {}
 
   /** Hitbox dos carros: encostou/foi atropelado -> arremessada pra frente e vira. */
   private updateCarsHit(dt: number) {
+    if (this.ridingCar) return; // dentro do carro: não é atropelada
     if (this.carHitCD > 0) this.carHitCD -= dt;
     const t = this.cow.body.translation();
     if (t.y > 4.5) return; // voando por cima: sem hitbox
@@ -1872,30 +1929,35 @@ constructor() {}
       const fz = c.axis === 'z' ? c.dir : 0;
       const ax = m.position.x + fx * 7;
       const az = m.position.z + fz * 7;
-      // só desvia do que está perto da vaca (longe, a avenida é livre)
-      const nearCow = Math.abs(m.position.x - cp.x) < 80 && Math.abs(m.position.z - cp.z) < 80;
+      // retângulo à frente do carro: 0.5..12m no rumo, ±largura lateral.
+      // (antes só verificava a <80m da vaca; o resto atropelava NPC sem frear)
+      const ahead = (tx: number, tz: number, lateral: number): boolean => {
+        const dx = tx - m.position.x;
+        const dz = tz - m.position.z;
+        const dF = dx * fx + dz * fz;
+        const dL = Math.abs(dx * fz - dz * fx);
+        return dF > 0.5 && dF < 12 && dL < lateral;
+      };
       let blocked = false;
-      if (nearCow) {
-        if (Math.abs(cp.x - ax) < 4 && Math.abs(cp.z - az) < 4 && cowY < 4) blocked = true;
-        if (!blocked) {
-          for (const n of this.npcs) {
-            const st = n.state;
-            if (st === 'carried' || st === 'inCannon' || st === 'launched') continue;
-            const t = n.body.translation();
-            const dx = t.x - ax, dz = t.z - az;
-            if (dx * dx + dz * dz < 9) { blocked = true; break; }
-          }
+      // vaca (só se estiver no chão; voando por cima, passa).
+      // carro "barbeiro" (rage) NÃO freia pra vaca: ele atropela.
+      if (!c.rage && cowY < 4 && ahead(cp.x, cp.z, 4.5)) blocked = true;
+      if (!blocked) {
+        for (const n of this.npcs) {
+          const st = n.state;
+          if (st === 'carried' || st === 'inCannon' || st === 'launched') continue;
+          const t = n.body.translation();
+          if (ahead(t.x, t.z, 4)) { blocked = true; break; }
         }
-        if (!blocked) {
-          for (const cn of this.world.cannons) {
-            const dx = cn.x - ax, dz = cn.z - az;
-            if (dx * dx + dz * dz < 9) { blocked = true; break; }
-          }
+      }
+      if (!blocked) {
+        for (const cn of this.world.cannons) {
+          if (ahead(cn.x, cn.z, 4)) { blocked = true; break; }
         }
-        if (!blocked) {
-          for (const b of this.world.buildings) {
-            if (Math.abs(ax - b.x) < b.halfW + 1 && Math.abs(az - b.z) < b.halfD + 1) { blocked = true; break; }
-          }
+      }
+      if (!blocked) {
+        for (const b of this.world.buildings) {
+          if (Math.abs(ax - b.x) < b.halfW + 1 && Math.abs(az - b.z) < b.halfD + 1) { blocked = true; break; }
         }
       }
       const yawFor = (axis: 'x' | 'z', dir: number) =>
@@ -2039,7 +2101,17 @@ constructor() {}
     if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
     if (this.input.consumeOnce('KeyM')) this.toggleSound();
 
-    this.updateCow(dt);
+    // dentro do carro: a vaca viaja com ele (sem física, sem colisão)
+    if (this.ridingCar) {
+      const m = this.ridingCar.mesh;
+      this.cow.body.setTranslation({ x: m.position.x, y: m.position.y + 1.6, z: m.position.z }, true);
+      this.cow.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.cow.yaw = m.rotation.y;
+      this.cow.group.position.set(m.position.x, m.position.y + 1.6 - COW_HALF_H, m.position.z);
+      this.cow.group.visible = false;
+    } else {
+      this.updateCow(dt);
+    }
     this.updateCars(dt);
     this.updateCarsHit(dt);
     this.updateCarVisibility();

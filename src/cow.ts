@@ -300,6 +300,11 @@ export class Cow {
     }
   }
 
+  /** Colisor vira sensor (fantasma): pra entrar no carro sem empurrar nada. */
+  setGhost(on: boolean): void {
+    this.collider.setSensor(on);
+  }
+
   /** Aplica a skin (tinta o FBX; se ainda não carregou, vale quando chegar). */
   setSkin(skin: Skin): void {
     this.skin = skin;

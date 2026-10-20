@@ -127,7 +127,7 @@ export class World {
   private pumpT = 0;
   /** Animados do mapa-guia: moinho, carros, fumaça, fogueira */
   windmillBlades: THREE.Group | null = null;
-  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number; v: number; blockT: number }[] = [];
+  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number; v: number; blockT: number; rage: boolean }[] = [];
   smoke: { mesh: THREE.Mesh; speed: number; maxY: number }[] = [];
   fireLight: THREE.PointLight | null = null;
   private animT = 0;
@@ -1435,7 +1435,7 @@ const towerBox = new THREE.Box3();
       if (i % 2 === 1) car.rotation.y = Math.PI;
       this.scene.add(car);
       const sp = 10 + (i % 3) * 2;
-      this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1060, max: 1130, v: sp, blockT: 0 });
+      this.cars.push({ mesh: car, axis: 'z', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1060, max: 1130, v: sp, blockT: 0, rage: i % 3 === 2 });
     }
     for (let i = 0; i < 5; i++) {
       const car = mkCar(carColors[(i + 2) % carColors.length]);
@@ -1444,7 +1444,7 @@ const towerBox = new THREE.Box3();
       car.position.set(-1300 + i * 520, 0.1, i % 2 === 0 ? -3 : 3);
       this.scene.add(car);
       const sp = 10 + (i % 3) * 2;
-      this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1380, max: 1130, v: sp, blockT: 0 });
+      this.cars.push({ mesh: car, axis: 'x', dir: i % 2 === 0 ? 1 : -1, speed: sp, min: -1380, max: 1130, v: sp, blockT: 0, rage: i % 3 === 1 });
     }
     this.logProp('traffic', 0, 0);
     void this.loadCarModel();

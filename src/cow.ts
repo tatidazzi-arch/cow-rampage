@@ -144,11 +144,11 @@ export class Cow {
       model.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(model);
       const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      // eixo comprido ao longo da espinha (+Z); se veio atravessada, gira 90°
+      // eixo comprido ao longo da espinha (+Z)
       const inner = new THREE.Group();
       inner.add(model);
-      if (size.x > size.z) inner.rotation.y = Math.PI / 2;
+      // o modelo vem com o POMO (frente da sela) virado pra trás: gira 180°
+      inner.rotation.y = Math.PI;
       // o GLB otimizado veio sem textura: retexturiza com o couro (leve)
       {
         const loader = new THREE.TextureLoader();
@@ -172,7 +172,12 @@ export class Cow {
       // modelo do Tripo vem gigante: 55% do tamanho (sela ~1.2m, não 2.2m)
       const s = longest > 0 ? (2.2 / longest) * 0.55 : 1;
       inner.scale.setScalar(s);
-      inner.position.set(-center.x * s, 0, -center.z * s);
+      // recentraliza DEPOIS de girar (girar 180° espelha x/z: se centralizar
+      // antes, a sela sai do lugar)
+      inner.updateMatrixWorld(true);
+      const rotBox = new THREE.Box3().setFromObject(inner);
+      const rc = rotBox.getCenter(new THREE.Vector3());
+      inner.position.set(-rc.x, 0, -rc.z);
       inner.updateMatrixWorld(true);
       inner.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -185,13 +190,26 @@ export class Cow {
       inner.position.y = 1.5 - third;
       inner.position.z += 0; // a posição no dorso é calculada pela geometria
       // almofada do assento (o couro do modelo vem com o assento aberto: via
-      // e aparece um buraco no meio da sela)
+      // e aparece um buraco no meio da sela) — mesmo material do couro
       {
         inner.updateMatrixWorld(true);
         const cbb = new THREE.Box3().setFromObject(inner);
+        const leatherMap = (() => {
+          let m: THREE.Texture | null = null;
+          model.traverse((o) => {
+            const mm = o as THREE.Mesh;
+            if (m || !mm.isMesh) return;
+            const mats = Array.isArray(mm.material) ? mm.material : [mm.material];
+            for (const x of mats) {
+              const mat = x as THREE.MeshStandardMaterial;
+              if (mat && mat.map) { m = mat.map; break; }
+            }
+          });
+          return m;
+        })();
         const cushion = new THREE.Mesh(
           new THREE.SphereGeometry(1, 16, 12),
-          new THREE.MeshLambertMaterial({ color: 0x4a3524 }),
+          new THREE.MeshLambertMaterial({ color: 0xb59a7a, map: leatherMap ?? undefined }),
         );
         // converte o topo do couro (mundo) pro espaço local do inner (com escala)
         // assento: mais abaixo do topo (o topo é a crista/amarra do couro)
@@ -224,10 +242,19 @@ export class Cow {
     if (!saddle || !root || this.saddleBone) return;
     root.updateMatrixWorld(true);
     this.group.updateMatrixWorld(true);
-    // dorso do modelo no espaço do grupo (garupa -> focinho)
-    const mb = new THREE.Box3().setFromObject(root);
-    const tailZ = this.group.worldToLocal(new THREE.Vector3(0, 0, mb.min.z)).z;
-    const noseZ = this.group.worldToLocal(new THREE.Vector3(0, 0, mb.max.z)).z;
+    // pontas do corpo pelos OSSOS (cauda -> focinho): o bbox do modelo engana
+    // (as patas de trás esticam o z mínimo e jogam a sela pro lado errado)
+    let tailZ = 1e9, noseZ = -1e9;
+    const bv = new THREE.Vector3();
+    root.traverse((o) => {
+      const b = o as THREE.Bone;
+      if (!b.isBone) return;
+      bv.set(0, 0, 0).applyMatrix4(b.matrixWorld);
+      const lz = this.group.worldToLocal(bv).z;
+      if (lz < tailZ) tailZ = lz;
+      if (lz > noseZ) noseZ = lz;
+    });
+    if (tailZ > noseZ) { tailZ = -1; noseZ = 1; }
     const targetZ = tailZ + (noseZ - tailZ) * 0.45;
     // osso de coluna mais próximo do ponto certo
     const cands: { b: THREE.Bone; d: number; y: number }[] = [];
@@ -397,8 +424,11 @@ export class Cow {
         return;
       }
       this.world.removeCollider(this.collider, true);
-      // pés (y=0 do modelo) na base do corpo: translada -HALF_H
-      this.collider = this.world.createCollider(desc.setTranslation(0, -HALF_H, 0), this.body);
+      // o border radius (0.25) INFLADURA a casca pra baixo: compensa pra os
+      // pés visuais encostarem no chão (senão a vaca flutua 25cm).
+      const BORDER = 0.25;
+      this.collider = this.world.createCollider(
+        desc.setTranslation(0, -HALF_H - minY + BORDER, 0), this.body);
       console.log(`[vaca] hull do modelo: y ${minY.toFixed(2)}..${maxY.toFixed(2)} (${(pts.length / 3).toFixed(0)} pts)`);
     } catch (err) {
       console.warn('[vaca] hull falhou, mantendo caixa:', err);

@@ -68,6 +68,9 @@ export class Cow {
   private flame: THREE.Mesh | null = null;
   /** Sela: grupo, prontidão e o osso da coluna que ela segue. */
   private saddleGroup: THREE.Group | null = null;
+  /** Pose de queda (fall.glb, estática) — aparece enquanto a vaca cai. */
+  private fallMesh: THREE.Mesh | null = null;
+  private modelMesh: THREE.Object3D | null = null;
   private modelRoot: THREE.Object3D | null = null;
   private saddleReady = false;
   private saddleBone: THREE.Bone | null = null;
@@ -366,6 +369,7 @@ export class Cow {
 
       this.mixer = spawned.mixer;
       this.clips = spawned.clips;
+      this.modelMesh = spawned.model;
       // altura real do modelo (pro dorso encostar no chão quando deitada)
       const top = new THREE.Box3().setFromObject(spawned.model).max.y;
       if (top > 0) this.modelTop = top;
@@ -374,8 +378,42 @@ export class Cow {
       this.playClip('idle', 1);
       // sela já carregada? prende no osso agora
       if (this.saddleReady) this.attachSaddleToSpine();
+      void this.loadFallPose();
     } catch (err) {
       console.warn('Modelo FBX da vaca nao carregou, usando procedural:', err);
+    }
+  }
+
+  /** Pose de queda (fall.glb, malha estática com cor por vértice): aparece
+   *  enquanto a vaca está caindo (some quando ela pisa de novo). */
+  private async loadFallPose(): Promise<void> {
+    try {
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const gltf = await new GLTFLoader().loadAsync('models/cow/fall.glb');
+      const model = gltf.scene;
+      let mesh: THREE.Mesh | null = null;
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && !mesh) mesh = m;
+        if (m.isMesh) m.castShadow = true;
+      });
+      if (!mesh) return;
+      const mb = new THREE.Box3().setFromObject(model);
+      const size = mb.getSize(new THREE.Vector3());
+      // escala pra ter a mesma altura do modelo da vaca (2.15m)
+      const s = size.y > 0 ? 2.15 / size.y : 1;
+      const wrap = new THREE.Group();
+      wrap.add(model);
+      wrap.scale.setScalar(s);
+      const bb = new THREE.Box3().setFromObject(wrap);
+      const c = bb.getCenter(new THREE.Vector3());
+      wrap.position.set(-c.x, -bb.min.y, -c.z);
+      wrap.visible = false;
+      this.group.add(wrap);
+      this.fallMesh = wrap as unknown as THREE.Mesh;
+      console.log(`[vaca] pose de queda: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);
+    } catch (err) {
+      console.warn('Pose de queda nao carregou:', err);
     }
   }
 
@@ -468,6 +506,13 @@ export class Cow {
   update(dt: number, speed: number, airborne: boolean): void {
     if (this.mixer) this.mixer.update(dt);
     this.updateSaddleFollow();
+    // pose de queda (fall.glb) enquanto desce; o modelo animado some
+    if (this.fallMesh) {
+      const vy = this.body.linvel().y;
+      const falling = airborne && vy < -1.5;
+      this.fallMesh.visible = falling;
+      if (this.modelMesh) this.modelMesh.visible = !falling;
+    }
     this.flipCD -= dt;
     this.updateBelly(dt);
     if (this.bellyUpT > 0) {

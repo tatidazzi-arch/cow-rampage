@@ -74,6 +74,11 @@ export class Game {
   private physAcc = 0;
   /** maior velocidade de queda desde o último toque no chão (tombo) */
   private fallV = 0;
+  /** Tempo de queda (s): a gravidade cresce quanto mais tempo se cai. */
+  private fallT = 0;
+  /** Gravidade base (aumentada) e quanto a queda acelera a queda. */
+  private gravBase = 14;
+  private gravRamp = 16;
   /** embalo pós-foguete: enquanto > 0, sem freio brusco (desliza até parar) */
   private coastT = 0;
   /** cooldown do atropelamento (evita reatingir todo frame encostado) */
@@ -1591,6 +1596,9 @@ constructor() {}
     if (!this.cow.grounded) {
       // guarda a maior velocidade de queda pra medir o tombo no pouso
       this.fallV = Math.max(this.fallV, -currentVel.y);
+      // tempo de queda: a gravidade acelera quanto mais tempo se cai
+      if (currentVel.y < 0 && !inWater) this.fallT += dt;
+      else if (currentVel.y >= 0) this.fallT = 0;
     } else {
         if (!wasGrounded && this.fallV > 16) {
           // caiu de MUITO alto: tomba de barriga pra cima
@@ -1601,6 +1609,7 @@ constructor() {}
         if (this.carrying) this.dropCarried();
       }
       this.fallV = 0;
+      this.fallT = 0;
       if (!wasGrounded) this.cow.resetJumps();
     }
 
@@ -2056,6 +2065,14 @@ constructor() {}
     if (!this.started) return;
     this.input.syncLock();
     this.input.pollGamepad();
+    // GRAVIDADE DINÂMICA: quanto mais tempo a vaca cai, mais forte a gravidade
+    // (a queda vira mergulho: quanto mais tempo, mais rápido cai)
+    {
+      const ramp = Math.min(2.4, this.fallT);
+      const g = this.gravBase + ramp * this.gravRamp;
+      const gr = this.physics.gravity;
+      if (gr) { gr.x = 0; gr.y = -g; gr.z = 0; }
+    }
     // timestep fixo: fisica em tempo real mesmo com fps baixo
     this.physAcc += dt;
     let steps = 0;

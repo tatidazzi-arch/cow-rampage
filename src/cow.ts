@@ -70,7 +70,10 @@ export class Cow {
   private saddleGroup: THREE.Group | null = null;
   /** Pose de queda (fall.glb, estática) — aparece enquanto a vaca cai. */
   private fallMesh: THREE.Mesh | null = null;
+  private fallMat: THREE.MeshLambertMaterial | null = null;
   private modelMesh: THREE.Object3D | null = null;
+  /** Maior dimensão do modelo da vaca (pra pose de queda ter o mesmo tamanho). */
+  private modelMaxDim = 0;
   private modelRoot: THREE.Object3D | null = null;
   private saddleReady = false;
   private saddleBone: THREE.Bone | null = null;
@@ -371,8 +374,11 @@ export class Cow {
       this.clips = spawned.clips;
       this.modelMesh = spawned.model;
       // altura real do modelo (pro dorso encostar no chão quando deitada)
-      const top = new THREE.Box3().setFromObject(spawned.model).max.y;
+      const mbox = new THREE.Box3().setFromObject(spawned.model);
+      const top = mbox.max.y;
       if (top > 0) this.modelTop = top;
+      const msize = mbox.getSize(new THREE.Vector3());
+      this.modelMaxDim = Math.max(msize.x, msize.y, msize.z);
       this.modelReady = true;
       tintCowModel(spawned.model, this.skin);
       this.playClip('idle', 1);
@@ -384,24 +390,32 @@ export class Cow {
     }
   }
 
-  /** Pose de queda (fall.glb, malha estática com cor por vértice): aparece
-   *  enquanto a vaca está caindo (some quando ela pisa de novo). */
+  /** Pose de queda (fall.glb, malha estática): aparece enquanto a vaca está
+   *  caindo — com o MESMO material da vaca (T_Cow_B) e no MESMO tamanho. */
   private async loadFallPose(): Promise<void> {
     try {
       const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
       const gltf = await new GLTFLoader().loadAsync('models/cow/fall.glb');
       const model = gltf.scene;
-      let mesh: THREE.Mesh | null = null;
+      // material da vaca (textura + normal do próprio FBX do jogo)
+      const loader = new THREE.TextureLoader();
+      const base = loader.load('models/cow/T_Cow_B.png');
+      base.colorSpace = THREE.SRGBColorSpace;
+      const nrm = loader.load('models/cow/T_Cow_N.png');
+      const mat = new THREE.MeshLambertMaterial({ color: this.skin.tint, map: base, normalMap: nrm });
       model.traverse((o) => {
         const m = o as THREE.Mesh;
-        if (m.isMesh && !mesh) mesh = m;
-        if (m.isMesh) m.castShadow = true;
+        if (m.isMesh) {
+          m.material = mat;
+          m.castShadow = true;
+        }
       });
-      if (!mesh) return;
       const mb = new THREE.Box3().setFromObject(model);
       const size = mb.getSize(new THREE.Vector3());
-      // escala pra ter a mesma altura do modelo da vaca (2.15m)
-      const s = size.y > 0 ? 2.15 / size.y : 1;
+      // MESMO tamanho da vaca normal: iguala a maior dimensão do modelo
+      const fallMax = Math.max(size.x, size.y, size.z);
+      const cowMax = this.modelMaxDim > 0 ? this.modelMaxDim : 4.6;
+      const s = fallMax > 0 ? cowMax / fallMax : 1;
       const wrap = new THREE.Group();
       wrap.add(model);
       wrap.scale.setScalar(s);
@@ -411,7 +425,8 @@ export class Cow {
       wrap.visible = false;
       this.group.add(wrap);
       this.fallMesh = wrap as unknown as THREE.Mesh;
-      console.log(`[vaca] pose de queda: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);
+      this.fallMat = mat;
+      console.log(`[vaca] pose de queda: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m (escala ${s.toFixed(2)})`);
     } catch (err) {
       console.warn('Pose de queda nao carregou:', err);
     }
@@ -482,6 +497,7 @@ export class Cow {
   setSkin(skin: Skin): void {
     this.skin = skin;
     if (this.modelReady) tintCowModel(this.group, skin);
+    if (this.fallMat) this.fallMat.color.set(skin.tint);
   }
 
   private playClip(name: string, timeScale: number): void {
@@ -512,6 +528,11 @@ export class Cow {
       const falling = airborne && vy < -1.5;
       this.fallMesh.visible = falling;
       if (this.modelMesh) this.modelMesh.visible = !falling;
+      // a sela inclina 45° quando a queda começa
+      if (this.saddleGroup) {
+        const want = falling ? -Math.PI / 4 : 0;
+        this.saddleGroup.rotation.x += (want - this.saddleGroup.rotation.x) * Math.min(1, dt * 6);
+      }
     }
     this.flipCD -= dt;
     this.updateBelly(dt);

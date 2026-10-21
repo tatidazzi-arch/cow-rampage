@@ -127,11 +127,12 @@ export class Cow {
     void this.loadSaddle(saddle, blanket);
   }
 
-  /** Sela de couro (saddle.fbx) no lugar da manta: ~2.2m no dorso. */
+  /** Sela de couro (saddle.glb, 0.9MB) no lugar da manta. */
   private async loadSaddle(saddle: THREE.Group, fallback: THREE.Mesh): Promise<void> {
     try {
-      const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
-      const model = await new FBXLoader().loadAsync('models/cow/saddle/saddle.fbx');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const gltf = await new GLTFLoader().loadAsync('models/cow/saddle/saddle.glb');
+      const model = gltf.scene;
       model.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(model);
       const size = box.getSize(new THREE.Vector3());
@@ -140,6 +141,25 @@ export class Cow {
       const inner = new THREE.Group();
       inner.add(model);
       if (size.x > size.z) inner.rotation.y = Math.PI / 2;
+      // o GLB otimizado veio sem textura: retexturiza com o couro (leve)
+      {
+        const loader = new THREE.TextureLoader();
+        const leather = loader.load('models/cow/saddle/leather.jpg');
+        leather.colorSpace = THREE.SRGBColorSpace;
+        const leatherN = loader.load('models/cow/saddle/leather_n.jpg');
+        model.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh) return;
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mm of mats) {
+            const mat = mm as THREE.MeshStandardMaterial;
+            if (!mat || !('map' in mat)) continue;
+            mat.map = leather;
+            if ('normalMap' in mat) mat.normalMap = leatherN;
+            mat.needsUpdate = true;
+          }
+        });
+      }
       const longest = Math.max(size.x, size.z);
       // modelo do Tripo vem gigante: 55% do tamanho (sela ~1.2m, não 2.2m)
       const s = longest > 0 ? (2.2 / longest) * 0.55 : 1;
@@ -154,8 +174,8 @@ export class Cow {
       // assenta o TERÇO de baixo no dorso (estribos pendem pros lados da
       // barriga; alinhar pelo mínimo flutua a sela por causa das correias)
       const third = bb.min.y + (bb.max.y - bb.min.y) * 0.3;
-      inner.position.y = 1.7 - third;
-      inner.position.z += 0.5; // meio do dorso (não na garupa)
+      inner.position.y = 1.5 - third;
+      inner.position.z -= 0.2; // meio do dorso (não no pescoço, não na garupa)
       saddle.add(inner);
       fallback.visible = false;
       console.log(`[sela] couro carregado: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);

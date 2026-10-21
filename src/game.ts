@@ -18,6 +18,7 @@ import {
 import { isTouchDevice, setupTouchControls } from './touch';
 import { isMuted, playSfx, resumeAudio, toggleMute } from './sound';
 import { cleanName } from './profanity';
+import { CowAI } from './ai';
 
 /** Hash do commit injetado no build (vite.config). */
 declare const __COMMIT__: string;
@@ -42,6 +43,8 @@ export class Game {
   private npcs: NPCPhysics[] = [];
   private net = new NetManager();
   private remoteCows = new Map<string, RemoteCow>();
+  /** A IA (vaca preta e verde que fala por voz). */
+  private cowAI: CowAI | null = null;
   private netActive = false;
   private netAcc = 0;
 
@@ -345,6 +348,7 @@ constructor() {}
   /** Sair: volta pra tela da senha. */
   private lockGame() {
     if (this.netActive) this.leaveNet();
+    if (this.cowAI) { this.cowAI.stop(); this.cowAI = null; }
     this.started = false;
     if (document.pointerLockElement) {
       try {
@@ -584,6 +588,7 @@ constructor() {}
         <h2>🐄 Goat Simulator Edition</h2>
         <div id="menuwallet">🪙 0 DINCOW</div>
         <button id="playBtn">jogar offline</button>
+        <button id="aiBtn">🤖 jogar com IA</button>
         <button id="netBtn">jogar online</button>
         <button id="cfgBtn">configurações</button>
         <button id="sairBtn">sair</button>
@@ -634,6 +639,10 @@ constructor() {}
     document.getElementById('playBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
       this.beginPlay(false);
+    });
+    document.getElementById('aiBtn')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.beginPlay(false, true);
     });
     document.getElementById('netBtn')!.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -872,6 +881,7 @@ constructor() {}
   /** Volta pro menu (sai da sala se estiver online). */
   private exitToMenu() {
     if (this.netActive) this.leaveNet();
+    if (this.cowAI) { this.cowAI.stop(); this.cowAI = null; }
     this.started = false;
     if (document.pointerLockElement) {
       try {
@@ -944,13 +954,22 @@ constructor() {}
     el.innerHTML = html;
   }
 
-  private beginPlay(multiplayer: boolean) {
+  private beginPlay(multiplayer: boolean, withAI = false) {
     const start = document.getElementById('start');
     if (start) start.style.display = 'none';
     document.getElementById('hud')!.style.display = 'block';
     document.getElementById('controls')!.style.display = 'block';
     document.getElementById('mission')!.style.display = 'block';
     this.started = true;
+    // modo IA: a vaca preta e verde que conversa por voz
+    if (withAI && !this.cowAI) {
+      this.cowAI = new CowAI();
+      void this.cowAI.build(this.scene).then(() => {
+        if (this.cowAI) this.cowAI.start(this.cow.group.position);
+      });
+      this.cowAI.onSay = (t) => this.showMessage(`CowAI: ${t}`);
+      this.cowAI.onLog = (t) => console.log('[cowai]', t);
+    }
     // teclado/controle/touch limpos ao começar + sela equipada
     this.input.keys = {};
     this.input.joyF = 0;
@@ -2131,6 +2150,10 @@ constructor() {}
     }
     this.updateCars(dt);
     this.updateCarsHit(dt);
+    // IA: anda, mantém distância do jogador, conversa
+    if (this.cowAI) {
+      this.cowAI.update(dt, this.cow.group.position, (x, z) => this.world.groundHeight(x, z));
+    }
     this.updateCarVisibility();
     this.updateNPCs(dt);
     this.updateBullets();

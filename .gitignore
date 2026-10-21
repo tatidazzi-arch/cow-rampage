@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# logs de teste
+devlog*.txt
+previewlog.txt
+
+# mapa do Unreal (grande, fica fora do repo até ser otimizado)
+public/models/mansion.glb
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

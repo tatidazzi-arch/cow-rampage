@@ -66,6 +66,11 @@ export class Cow {
   /** Aparelhos das costas: sela, jetpack de bomba atômica e bíblia. */
   private gadgets: Record<string, THREE.Group> = {};
   private flame: THREE.Mesh | null = null;
+  /** Sela: grupo, prontidão e o boneco onde ela fica presa (osso da coluna). */
+  private saddleGroup: THREE.Group | null = null;
+  private modelRoot: THREE.Object3D | null = null;
+  private saddleReady = false;
+  private saddleAttached = false;
 
   private buildGadgets(): void {
     // sela: manta no dorso
@@ -117,6 +122,7 @@ export class Cow {
     pages.position.set(0, 3.48, 0.3);
     book.add(pages);
     this.gadgets = { sela: saddle, jetpack: pack, biblia: book };
+    this.saddleGroup = saddle;
     for (const [id, g] of Object.entries(this.gadgets)) {
       g.visible = id === 'sela';
       this.group.add(g);
@@ -175,13 +181,64 @@ export class Cow {
       // barriga; alinhar pelo mínimo flutua a sela por causa das correias)
       const third = bb.min.y + (bb.max.y - bb.min.y) * 0.3;
       inner.position.y = 1.5 - third;
-      inner.position.z -= 0.2; // meio do dorso (não no pescoço, não na garupa)
+      inner.position.z += 0.15; // um pouco à frente, no meio do dorso
       saddle.add(inner);
       fallback.visible = false;
+      this.saddleReady = true;
+      // se a vaca real já carregou, prende a sela no osso da coluna agora
+      if (this.modelRoot) this.attachSaddleToSpine();
       console.log(`[sela] couro carregado: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m`);
     } catch (err) {
       console.warn('Sela de couro nao carregou, mantendo manta:', err);
     }
+  }
+
+  /** Prende a sela no osso da coluna: ela acompanha a animação da vaca
+   *  (idle, caminhada, corrida) em vez de ficar grudada no vazio. */
+  private attachSaddleToSpine(): void {
+    const saddle = this.saddleGroup;
+    const root = this.modelRoot;
+    if (!saddle || !root || this.saddleAttached) return;
+    root.updateMatrixWorld(true);
+    this.group.updateMatrixWorld(true);
+    // acha o osso da coluna mais próximo da altura da sela
+    const cands: { b: THREE.Bone; dy: number }[] = [];
+    const saddleY = saddle.getWorldPosition(new THREE.Vector3()).y;
+    root.traverse((o) => {
+      const b = o as THREE.Bone;
+      if (!b.isBone) return;
+      if (!/spine|chest|back/i.test(b.name)) return;
+      const wy = b.getWorldPosition(new THREE.Vector3()).y;
+      cands.push({ b, dy: Math.abs(wy - saddleY) });
+    });
+    if (cands.length === 0) {
+      console.log('[sela] sem osso de coluna: sela fica solta');
+      return;
+    }
+    cands.sort((a, c) => a.dy - c.dy);
+    const bone = cands[0]!.b;
+    // pivot local = osso⁻¹ * grupo (preserva o lugar atual da sela)
+    const local = new THREE.Matrix4()
+      .copy(bone.matrixWorld)
+      .invert()
+      .multiply(this.group.matrixWorld);
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const s = new THREE.Vector3();
+    local.decompose(p, q, s);
+    const pivot = new THREE.Group();
+    pivot.position.copy(p);
+    pivot.quaternion.copy(q);
+    pivot.scale.copy(s);
+    pivot.position.y -= 0.16; // afunda no pelo (o osso fica acima da pele)
+    bone.add(pivot);
+    this.group.remove(saddle);
+    pivot.add(saddle);
+    saddle.position.set(0, 0, 0);
+    saddle.quaternion.identity();
+    saddle.scale.set(1, 1, 1);
+    this.saddleAttached = true;
+    console.log(`[sela] presa no osso ${bone.name}`);
   }
 
   /** Bomba atômica do pack do usuário no lugar dos cilindros. */
@@ -245,13 +302,15 @@ export class Cow {
       const wrap = new THREE.Group();
       wrap.add(spawned.model);
       this.group.add(wrap);
+      this.modelRoot = wrap;
       // hitbox = a própria vaca (convex hull do modelo em pose de descanso;
       // trimesh não vale em corpo dinâmico, hull é o equivalente válido)
       this.swapToHull(spawned.model);
 
       // Esconde a vaca procedural (fallback) agora que o modelo real chegou.
+      // (a sela NÃO entra: ela é presa no osso, não some)
       for (const child of [...this.group.children]) {
-        if (child !== wrap) child.visible = false;
+        if (child !== wrap && child !== this.saddleGroup) child.visible = false;
       }
 
       this.mixer = spawned.mixer;
@@ -262,6 +321,8 @@ export class Cow {
       this.modelReady = true;
       tintCowModel(spawned.model, this.skin);
       this.playClip('idle', 1);
+      // sela já carregada? prende no osso agora
+      if (this.saddleReady) this.attachSaddleToSpine();
     } catch (err) {
       console.warn('Modelo FBX da vaca nao carregou, usando procedural:', err);
     }

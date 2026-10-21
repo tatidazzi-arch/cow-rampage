@@ -71,6 +71,7 @@ export class Cow {
   /** Pose de queda (fall.glb, estática) — aparece enquanto a vaca cai. */
   private fallMesh: THREE.Mesh | null = null;
   private fallMat: THREE.MeshLambertMaterial | null = null;
+  private fallSaddlePos = new THREE.Vector3();
   private modelMesh: THREE.Object3D | null = null;
   /** Maior dimensão do modelo da vaca (pra pose de queda ter o mesmo tamanho). */
   private modelMaxDim = 0;
@@ -397,12 +398,12 @@ export class Cow {
       const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
       const gltf = await new GLTFLoader().loadAsync('models/cow/fall.glb');
       const model = gltf.scene;
-      // material da vaca (textura + normal do próprio FBX do jogo)
+      // material da vaca (textura base; normal map fica de fora — as normais
+      // do mesh low-poly nao casam com o atlas e o couro fica esquisito)
       const loader = new THREE.TextureLoader();
       const base = loader.load('models/cow/T_Cow_B.png');
       base.colorSpace = THREE.SRGBColorSpace;
-      const nrm = loader.load('models/cow/T_Cow_N.png');
-      const mat = new THREE.MeshLambertMaterial({ color: this.skin.tint, map: base, normalMap: nrm });
+      const mat = new THREE.MeshLambertMaterial({ color: this.skin.tint, map: base });
       model.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh) {
@@ -426,6 +427,22 @@ export class Cow {
       this.group.add(wrap);
       this.fallMesh = wrap as unknown as THREE.Mesh;
       this.fallMat = mat;
+      // onde a sela fica na pose de queda (no dorso da vaca tombada):
+      // bbox do modelo convertida pro espaço do grupo
+      {
+        const wbb = new THREE.Box3().setFromObject(wrap);
+        const pts: THREE.Vector3[] = [];
+        for (const x of [wbb.min.x, wbb.max.x]) {
+          for (const y of [wbb.min.y, wbb.max.y]) {
+            for (const z of [wbb.min.z, wbb.max.z]) {
+              pts.push(this.group.worldToLocal(new THREE.Vector3(x, y, z)));
+            }
+          }
+        }
+        const lbox = new THREE.Box3().setFromPoints(pts);
+        const c = lbox.getCenter(new THREE.Vector3());
+        this.fallSaddlePos.set(c.x, lbox.max.y - (lbox.max.y - lbox.min.y) * 0.22, c.z);
+      }
       console.log(`[vaca] pose de queda: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m (escala ${s.toFixed(2)})`);
     } catch (err) {
       console.warn('Pose de queda nao carregou:', err);
@@ -528,10 +545,16 @@ export class Cow {
       const falling = airborne && vy < -1.5;
       this.fallMesh.visible = falling;
       if (this.modelMesh) this.modelMesh.visible = !falling;
-      // a sela inclina 45° quando a queda começa
-      if (this.saddleGroup) {
-        const want = falling ? -Math.PI / 4 : 0;
-        this.saddleGroup.rotation.x += (want - this.saddleGroup.rotation.x) * Math.min(1, dt * 6);
+      const saddle = this.saddleGroup;
+      if (saddle) {
+        if (falling) {
+          // na queda a sela fica na pose tombada e inclina 45° (pra frente)
+          saddle.position.lerp(this.fallSaddlePos, Math.min(1, dt * 6));
+          const want = Math.PI / 4;
+          saddle.rotation.x += (want - saddle.rotation.x) * Math.min(1, dt * 6);
+        } else {
+          saddle.rotation.x += (0 - saddle.rotation.x) * Math.min(1, dt * 6);
+        }
       }
     }
     this.flipCD -= dt;

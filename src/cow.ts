@@ -66,11 +66,13 @@ export class Cow {
   /** Aparelhos das costas: sela, jetpack de bomba atômica e bíblia. */
   private gadgets: Record<string, THREE.Group> = {};
   private flame: THREE.Mesh | null = null;
-  /** Sela: grupo, prontidão e o boneco onde ela fica presa (osso da coluna). */
+  /** Sela: grupo, prontidão e o osso da coluna que ela segue. */
   private saddleGroup: THREE.Group | null = null;
   private modelRoot: THREE.Object3D | null = null;
   private saddleReady = false;
-  private saddleAttached = false;
+  private saddleBone: THREE.Bone | null = null;
+  private saddleBase = new THREE.Vector3();
+  private saddleBoneBase = new THREE.Vector3();
 
   private buildGadgets(): void {
     // sela: manta no dorso
@@ -181,7 +183,26 @@ export class Cow {
       // barriga; alinhar pelo mínimo flutua a sela por causa das correias)
       const third = bb.min.y + (bb.max.y - bb.min.y) * 0.3;
       inner.position.y = 1.5 - third;
-      inner.position.z += 0.15; // um pouco à frente, no meio do dorso
+      inner.position.z += 0; // a posição no dorso é calculada pela geometria
+      // almofada do assento (o couro do modelo vem com o assento aberto: via
+      // e aparece um buraco no meio da sela)
+      {
+        inner.updateMatrixWorld(true);
+        const cbb = new THREE.Box3().setFromObject(inner);
+        const cushion = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 16, 12),
+          new THREE.MeshLambertMaterial({ color: 0x4a3524 }),
+        );
+        // converte o topo do couro (mundo) pro espaço local do inner (com escala)
+        // assento: mais abaixo do topo (o topo é a crista/amarra do couro)
+        const seatY = cbb.min.y + (cbb.max.y - cbb.min.y) * 0.62;
+        const top = inner.worldToLocal(new THREE.Vector3(0, seatY, 0));
+        cushion.position.copy(top);
+        const span = inner.worldToLocal(new THREE.Vector3(0, cbb.max.y, 0.3)).distanceTo(top);
+        const wide = inner.worldToLocal(new THREE.Vector3(0.35, cbb.max.y, 0)).distanceTo(top);
+        cushion.scale.set(Math.max(0.12, wide * 0.7), Math.max(0.05, span * 0.35), Math.max(0.12, span * 0.8));
+        inner.add(cushion);
+      }
       saddle.add(inner);
       fallback.visible = false;
       this.saddleReady = true;
@@ -193,52 +214,55 @@ export class Cow {
     }
   }
 
-  /** Prende a sela no osso da coluna: ela acompanha a animação da vaca
-   *  (idle, caminhada, corrida) em vez de ficar grudada no vazio. */
+  /** A sela segue o osso da coluna: sobe/desce com a animação (idle, caminhada,
+   *  corrida) sem inclinar e sem girar ao redor do osso (ficava torta).
+   *  A posição é calculada pela GEOMETRIA (45% do dorso, da garupa pro focinho),
+   *  não pelo osso — senão caía na cernelha. */
   private attachSaddleToSpine(): void {
     const saddle = this.saddleGroup;
     const root = this.modelRoot;
-    if (!saddle || !root || this.saddleAttached) return;
+    if (!saddle || !root || this.saddleBone) return;
     root.updateMatrixWorld(true);
     this.group.updateMatrixWorld(true);
-    // acha o osso da coluna mais próximo da altura da sela
-    const cands: { b: THREE.Bone; dy: number }[] = [];
-    const saddleY = saddle.getWorldPosition(new THREE.Vector3()).y;
+    // dorso do modelo no espaço do grupo (garupa -> focinho)
+    const mb = new THREE.Box3().setFromObject(root);
+    const tailZ = this.group.worldToLocal(new THREE.Vector3(0, 0, mb.min.z)).z;
+    const noseZ = this.group.worldToLocal(new THREE.Vector3(0, 0, mb.max.z)).z;
+    const targetZ = tailZ + (noseZ - tailZ) * 0.45;
+    // osso de coluna mais próximo do ponto certo
+    const cands: { b: THREE.Bone; d: number; y: number }[] = [];
     root.traverse((o) => {
       const b = o as THREE.Bone;
       if (!b.isBone) return;
       if (!/spine|chest|back/i.test(b.name)) return;
-      const wy = b.getWorldPosition(new THREE.Vector3()).y;
-      cands.push({ b, dy: Math.abs(wy - saddleY) });
+      const l = this.group.worldToLocal(b.getWorldPosition(new THREE.Vector3()));
+      cands.push({ b, d: Math.abs(l.z - targetZ), y: l.y });
     });
     if (cands.length === 0) {
       console.log('[sela] sem osso de coluna: sela fica solta');
       return;
     }
-    cands.sort((a, c) => a.dy - c.dy);
+    cands.sort((a, c) => a.d - c.d);
     const bone = cands[0]!.b;
-    // pivot local = osso⁻¹ * grupo (preserva o lugar atual da sela)
-    const local = new THREE.Matrix4()
-      .copy(bone.matrixWorld)
-      .invert()
-      .multiply(this.group.matrixWorld);
-    const p = new THREE.Vector3();
-    const q = new THREE.Quaternion();
-    const s = new THREE.Vector3();
-    local.decompose(p, q, s);
-    const pivot = new THREE.Group();
-    pivot.position.copy(p);
-    pivot.quaternion.copy(q);
-    pivot.scale.copy(s);
-    pivot.position.y -= 0.16; // afunda no pelo (o osso fica acima da pele)
-    bone.add(pivot);
-    this.group.remove(saddle);
-    pivot.add(saddle);
-    saddle.position.set(0, 0, 0);
-    saddle.quaternion.identity();
-    saddle.scale.set(1, 1, 1);
-    this.saddleAttached = true;
-    console.log(`[sela] presa no osso ${bone.name}`);
+    const boneLocal = this.group.worldToLocal(bone.getWorldPosition(new THREE.Vector3()));
+    void boneLocal;
+    // sela no ponto certo do dorso (a altura vem do couro, já posicionado)
+    saddle.position.set(0, 0, targetZ);
+    this.saddleBone = bone;
+    this.saddleBase.copy(saddle.position);
+    this.saddleBoneBase.copy(root.worldToLocal(bone.getWorldPosition(new THREE.Vector3())));
+    console.log(`[sela] no dorso (z=${targetZ.toFixed(2)}) seguindo ${bone.name}`);
+  }
+
+  /** Aplica o deslocamento do osso na sela (a cada frame). */
+  private updateSaddleFollow(): void {
+    const saddle = this.saddleGroup;
+    const root = this.modelRoot;
+    const bone = this.saddleBone;
+    if (!saddle || !root || !bone) return;
+    bone.updateWorldMatrix(true, false);
+    const now = root.worldToLocal(bone.getWorldPosition(new THREE.Vector3()));
+    saddle.position.copy(this.saddleBase).add(now.sub(this.saddleBoneBase));
   }
 
   /** Bomba atômica do pack do usuário no lugar dos cilindros. */
@@ -413,6 +437,7 @@ export class Cow {
   /** Chamado todo frame pelo Game: avanca o mixer e escolhe idle/walk/run. */
   update(dt: number, speed: number, airborne: boolean): void {
     if (this.mixer) this.mixer.update(dt);
+    this.updateSaddleFollow();
     this.flipCD -= dt;
     this.updateBelly(dt);
     if (this.bellyUpT > 0) {

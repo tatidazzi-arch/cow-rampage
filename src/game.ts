@@ -963,12 +963,16 @@ constructor() {}
     this.started = true;
     // modo IA: a vaca preta e verde que conversa por voz
     if (withAI && !this.cowAI) {
-      this.cowAI = new CowAI();
-      void this.cowAI.build(this.scene).then(() => {
-        if (this.cowAI) this.cowAI.start(this.cow.group.position);
-      });
+      this.cowAI = new CowAI(this.scene, this.physics);
       this.cowAI.onSay = (t) => this.showMessage(`CowAI: ${t}`);
       this.cowAI.onLog = (t) => console.log('[cowai]', t);
+      this.cowAI.onDeliver = () => {
+        this.score += 8;
+        this.chaos = Math.min(100, this.chaos + 4);
+        this.missions.event('knock');
+        this.showMessage('CowAI trouxe um suéter! +8 DINCOW');
+      };
+      this.cowAI.start(this.cow.group.position);
     }
     // teclado/controle/touch limpos ao começar + sela equipada
     this.input.keys = {};
@@ -1445,6 +1449,26 @@ constructor() {}
       }
     }
     // PvP: cabeçada pega nas vacas dos amigos (hitbox = raio 5 na posição sincronizada)
+    // e na vaca da IA (mesma física: ela voa, cai e reclama)
+    if (this.cowAI) {
+      const av = this.cowAI.cow.body.translation();
+      const ad = Math.hypot(av.x - cx, av.z - cz);
+      if (ad < 5 && Math.abs(av.y - this.cow.body.translation().y) < 4) {
+        const l = Math.hypot(av.x - cx, av.z - cz) || 1;
+        this.cowAI.cow.body.applyImpulse({
+          x: ((av.x - cx) / l) * 150,
+          y: 110,
+          z: ((av.z - cz) / l) * 150,
+        }, true);
+        playSfx('thud');
+        this.showMessage('CABECADA no CowAI!');
+        this.spawnParticles(av.x, av.y + 1, av.z, 10, 0x39ff5a);
+        this.input.rumble(1, 0.6, 250);
+        this.score += 3;
+        this.chaos = Math.min(100, this.chaos + 4);
+        this.missions.event('headbutt');
+      }
+    }
     if (this.netActive) {
       for (const [peerId, rc] of this.remoteCows) {
         const dx = rc.target.x - cx;
@@ -2150,9 +2174,14 @@ constructor() {}
     }
     this.updateCars(dt);
     this.updateCarsHit(dt);
-    // IA: anda, mantém distância do jogador, conversa
+    // IA: joga, obedece, mantém distância do jogador, conversa
     if (this.cowAI) {
-      this.cowAI.update(dt, this.cow.group.position, (x, z) => this.world.groundHeight(x, z));
+      this.cowAI.update(
+        dt,
+        this.cow.group.position,
+        this.npcs,
+        (x, z) => this.world.groundHeight(x, z),
+      );
     }
     this.updateCarVisibility();
     this.updateNPCs(dt);

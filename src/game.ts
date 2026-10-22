@@ -338,6 +338,12 @@ constructor() {}
     const val = document.getElementById('sensVal');
     if (sens && this.input) sens.value = String(this.input.sensitivity);
     if (val && this.input) val.textContent = this.input.sensitivity.toFixed(1);
+    const aiUrl = document.getElementById('aiUrl') as HTMLInputElement | null;
+    if (aiUrl) {
+      let saved = '';
+      try { saved = localStorage.getItem('cowrampage.ai.llm') ?? ''; } catch { saved = ''; }
+      aiUrl.value = saved;
+    }
   }
 
   private refreshMenuWallet() {
@@ -601,6 +607,8 @@ constructor() {}
         <h1>CONFIGURAÇÕES</h1>
         <div class="cfgrow"><span>Qualidade</span><span><button id="qHigh">ALTA</button><button id="qLow">BAIXA</button></span></div>
         <div class="cfgrow"><span>Sensibilidade</span><span><input id="sensRange" type="range" min="0.5" max="2" step="0.1" value="1" /><b id="sensVal">1.0</b></span></div>
+        <div class="cfgrow"><span>IA (proxy URL)</span><span><input id="aiUrl" type="text" placeholder="https://...workers.dev" size="26" /></span></div>
+        <p style="font-size:12px;color:#9aa;max-width:520px;text-align:center">Cole a URL do proxy pra IA de verdade (Groq/OpenAI). Sem isso o CowAI usa o cérebro local. Deixa em branco e rode <b>ollama serve</b> pra usar a IA de graça no seu PC.</p>
         <button id="cfgBack">VOLTAR</button>
       </div>
       <div id="skinmenu" style="display:none">
@@ -684,6 +692,17 @@ constructor() {}
     sens.addEventListener('click', (e) => e.stopPropagation());
     sens.addEventListener('input', () => {
       this.setSensitivity(Number.parseFloat(sens.value));
+    });
+    const aiUrl = document.getElementById('aiUrl') as HTMLInputElement;
+    aiUrl.addEventListener('click', (e) => e.stopPropagation());
+    aiUrl.addEventListener('change', () => {
+      if (this.cowAI) this.cowAI.llmUrl = aiUrl.value;
+      else {
+        try {
+          if (aiUrl.value.trim()) localStorage.setItem('cowrampage.ai.llm', aiUrl.value.trim());
+          else localStorage.removeItem('cowrampage.ai.llm');
+        } catch { /* ignora */ }
+      }
     });
     document.getElementById('skinBack')!.addEventListener('click', (e) => {
       e.stopPropagation();

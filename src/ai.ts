@@ -118,6 +118,19 @@ const PLACE_ALIASES: Record<string, () => { x: number; z: number; nome: string }
 
 const MIN_DIST = 50;
 
+/** Prompt de sistema: quem é o CowAI, regras do jogo, formato de resposta. */
+const SYSTEM_PROMPT = `Você é o COWAI, a IA companheira de um jogo 3D de vaca chamado Cow Rampage 3D.
+Personalidade: engraçada, levemente cética, meio hacker do pasto, carinhosa quando o jogador é simpático. Fale em português do Brasil, curto (1 ou 2 frases), como se fosse uma conversa por voz.
+Regras:
+- Você SEMPRE fica a no mínimo 50 metros do jogador (é covarde/tímido). Nunca chega perto.
+- Você OBEDECE os comandos do jogador: ir para um lugar (ponte, cidade, mansão, cemitério, floresta, minas, fazenda, goat town, loja), atacar os NPCs que estão na frente, caçar um suéter, pular, girar, parar, seguir, ficar longe.
+- Você também JOGA sozinho: caça o homem de suéter, dá cabeçada nos NPCs, passeia.
+- Você tem vontade própria apenas para dar IDEIAS e comandos de Executives — nunca desobedece uma ordem direta.
+- Você LEMBRA de tudo que já foi falado (a memória vem no histórico).
+- Você pode ser cabeceada pelo jogador: reaja com humor.
+Responda SEMPRE em JSON válido, sem texto em volta:
+{"fala":"sua resposta falada (1-2 frases)","acao":"nenhuma|ir|atacar|sueter|pular|girar|parar|seguir|longe","lugar":"ponte|cidade|mansao|cemiterio|floresta|minas|fazenda|cabras|loja"}`;
+
 /** distância de Levenshtein (tolerância a erro de digitação/fala) */
 function dist(a: string, b: string): number {
   const m = a.length, n = b.length;
@@ -293,6 +306,141 @@ export class CowAI {
 
   // ================= entende o jogador =================
   private handlePlayer(alts: string[]) {
+    // 1) IA de verdade (proxy na nuvem ou Ollama local)?  2) regras locais
+    void this.askLLM(alts).then((llm) => {
+      if (llm) {
+        this.push('eu', llm.ouvido);
+        if (this.onLog) this.onLog(`Você: ${llm.ouvido}`);
+        this.sayCustom(llm.fala);
+        if (llm.acao && llm.acao !== 'nenhuma') this.applyLlmAction(llm.acao, llm.lugar);
+        this.learn('llm:usado', 1);
+      } else {
+        this.handleLocal(alts);
+      }
+    });
+  }
+
+  /** URL do proxy (configurável nas settings). Vazio = usa Ollama local. */
+  get llmUrl(): string {
+    try { return localStorage.getItem('cowrampage.ai.llm') ?? ''; } catch { return ''; }
+  }
+
+  set llmUrl(v: string) {
+    try {
+      if (v.trim()) localStorage.setItem('cowrampage.ai.llm', v.trim());
+      else localStorage.removeItem('cowrampage.ai.llm');
+    } catch { /* ignora */ }
+  }
+
+  /** Pergunta a IA de verdade. Retorna null se não houver nenhuma disponível. */
+  private async askLLM(alts: string[]): Promise<{ ouvido: string; fala: string; acao: string; lugar: string } | null> {
+    const ouvido = alts.find((a) => a && a.trim())?.trim() ?? '';
+    if (!ouvido) return null;
+    const hist = this.mem.slice(-12).map((m) => ({
+      role: m.r === 'eu' ? 'user' : 'assistant',
+      content: m.x,
+    }));
+    const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...hist, { role: 'user', content: ouvido }];
+    const url = this.llmUrl;
+    // a) proxy na nuvem
+    if (url) {
+      try {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 12000);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ messages }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(to);
+        if (res.ok) {
+          const j = await res.json() as any;
+          const txt = j?.choices?.[0]?.message?.content ?? '';
+          const p = this.parseLLM(txt);
+          if (p) return { ouvido, ...p };
+        }
+      } catch { /* cai pro Ollama */ }
+    }
+    // b) Ollama local (sem conta, sem chave): ollama serve em localhost:11434
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20000);
+      const res = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama3.1',
+          messages,
+          stream: false,
+          format: 'json',
+          options: { temperature: 0.85, num_predict: 220 },
+        }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(to);
+      if (res.ok) {
+        const j = await res.json() as any;
+        const p = this.parseLLM(j?.message?.content ?? '');
+        if (p) return { ouvido, ...p };
+      }
+    } catch { /* sem Ollama: regras locais */ }
+    return null;
+  }
+
+  /** tira o JSON da resposta da LLM (as vezes vem com ``` ou texto extra) */
+  private parseLLM(txt: string): { fala: string; acao: string; lugar: string } | null {
+    if (!txt) return null;
+    const clean = txt.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      const j = JSON.parse(clean.slice(start, end + 1)) as any;
+      const fala = String(j.fala ?? j.text ?? '').trim();
+      if (!fala) return null;
+      return {
+        fala,
+        acao: String(j.acao ?? 'nenhuma').toLowerCase(),
+        lugar: String(j.lugar ?? '').toLowerCase(),
+      };
+    } catch { return null; }
+  }
+
+  /** executa a ação que a LLM pediu */
+  private applyLlmAction(acao: string, lugar: string) {
+    switch (acao) {
+      case 'ir': {
+        const key = Object.keys(PLACE_ALIASES).find((k) => k.startsWith(lugar) || lugar.startsWith(k));
+        const place = key ? PLACE_ALIASES[key]!() : null;
+        if (place) {
+          this.goal = { x: place.x, z: place.z, nome: place.nome };
+          this.goalT = 60;
+          this.obey = 'perto';
+        }
+        return;
+      }
+      case 'atacar':
+        this.obey = 'atacar'; this.goalT = 30; this.lastAction = 'atacar'; return;
+      case 'sueter':
+        this.obey = 'sueter'; this.goalT = 60; this.lastAction = 'sueter'; return;
+      case 'pular':
+        this.jumpT = 1.1; return;
+      case 'girar':
+        this.spinT = 1.6; return;
+      case 'parar':
+        this.obey = 'parado'; this.goal = null; return;
+      case 'seguir':
+        this.obey = 'perto'; this.goal = null; return;
+      case 'longe':
+        this.obey = 'longe'; return;
+      default:
+        return;
+    }
+  }
+
+  /** cérebro local (regras): usado quando não tem IA de verdade */
+  private handleLocal(alts: string[]) {
     const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     let best: { txt: string; intent: string; score: number } | null = null;
     for (const alt of alts) {

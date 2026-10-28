@@ -820,7 +820,7 @@ constructor() {}
   }
 
   /** Copia as linhas de debug do Rapier para o LineSegments a cada frame.
-   *  Só entram colliders perto da vaca e cada linha é recortada num raio de 20 m:
+   *  Só entram colliders perto da vaca e cada linha é recortada num raio de 200 m:
    *  desenhar o mundo inteiro (terreno + construções) custava ~1 s por frame. */
   private updateDebugHitboxes(dt: number) {
     const lines = this.debugHitboxes;
@@ -828,10 +828,10 @@ constructor() {}
 
     const cow = this.cow ? this.cow.body.translation() : { x: 0, y: 0, z: 0 };
     const cx = cow.x, cy = cow.y, cz = cow.z;
-    const RANGE = 20;
+    const RANGE = 200;
     const near2 = RANGE * RANGE;
     // colliders com o centro um pouco além do raio ainda entram, porque a hitbox
-    // pode terminar dentro dos 20 m; o recorte abaixo apara o excesso.
+    // pode terminar dentro dos 200 m; o recorte abaixo apara o excesso.
     const pick2 = (RANGE + 8) * (RANGE + 8);
 
     const { vertices } = this.physics.debugRender(undefined, (collider: RAPIER.Collider) => {

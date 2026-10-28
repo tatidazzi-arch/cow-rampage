@@ -112,9 +112,14 @@ export class Game {
   private debugFpsShown = 0;
   /** buffer reaproveitado no recorte das linhas em volta da vaca */
   private debugBuffer = new Float32Array(0);
-  /** nº de triângulos por collider trimesh (cache; ler o buffer todo frame travaria) */
-  private debugTriCounts = new Map<number, number>();
   private debugSegmentsDrawn = 0;
+  /** wireframes dos prédios (trimesh): gerados 1x e cacheados, não a cada frame */
+  private debugTrimeshGroup: THREE.Group | null = null;
+  private debugTrimeshMat: THREE.LineBasicMaterial | null = null;
+  private debugTrimeshCache = new Map<number, { obj: THREE.LineSegments | null; x: number; y: number; z: number; segs: number }>();
+  private debugTrimeshQueue = new Set<number>();
+  private debugTrimeshSegments = 0;
+  private debugEvictAcc = 0;
   private missions = new MissionManager();
   private sweaterHintAt = 0;
   private wasSwimming = false;
@@ -780,7 +785,7 @@ constructor() {}
     const material = new THREE.LineBasicMaterial({
       color: 0x2f7bff,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.75,
       depthTest: false,
     });
     const lines = new THREE.LineSegments(geometry, material);
@@ -788,6 +793,11 @@ constructor() {}
     lines.renderOrder = 999;
     this.debugHitboxes = lines;
     this.scene.add(lines);
+    const group = new THREE.Group();
+    group.name = 'debug-trimesh';
+    this.scene.add(group);
+    this.debugTrimeshGroup = group;
+    this.debugTrimeshMat = material;
     this.createFpsMeter();
     console.log('[debug] hitboxes em azul ligadas');
   }
@@ -834,15 +844,22 @@ constructor() {}
     // pode terminar dentro dos 200 m; o recorte abaixo apara o excesso.
     const pick2 = (RANGE + 8) * (RANGE + 8);
 
+    this.debugTrimeshQueue.clear();
     const { vertices } = this.physics.debugRender(undefined, (collider: RAPIER.Collider) => {
       const t = collider.translation();
+      // prédios/terreno (trimesh) são desenhados à parte e cacheados: regerar
+      // as malhas grandes a cada frame custava ~1 s. O corpo do prédio fica no
+      // chão, então a distância é medida na horizontal (x/z).
+      if (collider.shapeType() === RAPIER.ShapeType.TriMesh) {
+        const hx = t.x - cx, hz = t.z - cz;
+        if (hx * hx + hz * hz > pick2) return false;
+        if (!this.debugTrimeshCache.has(collider.handle)) {
+          this.debugTrimeshQueue.add(collider.handle);
+        }
+        return false;
+      }
       const dx = t.x - cx, dy = t.y - cy, dz = t.z - cz;
-      if (dx * dx + dy * dy + dz * dz > pick2) return false;
-      // malhas de triângulos gigantes (terreno, mansões) continuam caríssimas
-      // mesmo com poucas perto: só desenha as pequenas.
-      if (collider.shapeType() === RAPIER.ShapeType.TriMesh
-        && this.debugTriangleCount(collider) > 15000) return false;
-      return true;
+      return dx * dx + dy * dy + dz * dz <= pick2;
     });
 
     let out = this.debugBuffer;
@@ -871,6 +888,7 @@ constructor() {}
       pos.needsUpdate = true;
     }
     lines.geometry.setDrawRange(0, w / 3);
+    this.updateDebugTrimeshes(dt);
 
     const el = this.debugFpsEl;
     if (!el) return;
@@ -880,22 +898,113 @@ constructor() {}
       const fps = this.debugFpsFrames / this.debugFpsAcc;
       const ms = (this.debugFpsAcc / this.debugFpsFrames) * 1000;
       this.debugFpsShown = Math.round(fps);
-      el.textContent = `FPS ${this.debugFpsShown} | ${ms.toFixed(1)} ms | ${this.debugSegmentsDrawn} linhas`;
+      el.textContent = `FPS ${this.debugFpsShown} | ${ms.toFixed(1)} ms | ${this.debugSegmentsDrawn + this.debugTrimeshSegments} linhas`;
       this.debugFpsAcc = 0;
       this.debugFpsFrames = 0;
     }
   }
 
-  /** Nº de triângulos de um collider trimesh (calculado uma vez por collider). */
-  private debugTriangleCount(collider: RAPIER.Collider): number {
-    const handle = collider.handle;
-    let n = this.debugTriCounts.get(handle);
-    if (n === undefined) {
-      const verts = collider.vertices();
-      n = verts ? Math.floor(verts.length / 9) : 0;
-      this.debugTriCounts.set(handle, n);
+  /** Gera no máximo ~4 ms de wireframe de trimesh por frame e libera o que ficou longe. */
+  private updateDebugTrimeshes(dt: number) {
+    const group = this.debugTrimeshGroup;
+    if (!group) return;
+
+    if (this.debugTrimeshQueue.size) {
+      const start = performance.now();
+      for (const handle of this.debugTrimeshQueue) {
+        this.debugTrimeshQueue.delete(handle);
+        this.buildDebugTrimesh(handle);
+        if (performance.now() - start > 4) break;
+      }
     }
-    return n;
+
+    this.debugEvictAcc += dt;
+    if (this.debugEvictAcc < 1) return;
+    this.debugEvictAcc = 0;
+    const cow = this.cow ? this.cow.body.translation() : null;
+    if (!cow) return;
+    const evict2 = 600 * 600;
+    for (const [handle, entry] of this.debugTrimeshCache) {
+      const dx = entry.x - cow.x, dz = entry.z - cow.z;
+      if (dx * dx + dz * dz < evict2) continue;
+      if (entry.obj) {
+        group.remove(entry.obj);
+        entry.obj.geometry.dispose();
+        this.debugTrimeshSegments -= entry.segs;
+      }
+      this.debugTrimeshCache.delete(handle);
+    }
+  }
+
+  /** Constrói o wireframe de um collider trimesh (prédio) e guarda no cache. */
+  private buildDebugTrimesh(handle: number) {
+    const collider = this.physics.getCollider(handle);
+    const group = this.debugTrimeshGroup;
+    const mat = this.debugTrimeshMat;
+    if (!collider || !group || !mat) return;
+
+    const t = collider.translation();
+    const entry = { obj: null as THREE.LineSegments | null, x: t.x, y: t.y, z: t.z, segs: 0 };
+    this.debugTrimeshCache.set(handle, entry);
+
+    const verts = collider.vertices();
+    const idx = collider.indices();
+    if (!verts || !idx || idx.length < 3) return;
+
+    // malhas do tamanho do mapa (terreno): fora, eram o maior custo
+    let mnx = Infinity, mnz = Infinity, mxx = -Infinity, mxz = -Infinity;
+    for (let i = 0; i < verts.length; i += 3) {
+      const x = verts[i]!, z = verts[i + 2]!;
+      if (x < mnx) mnx = x;
+      if (x > mxx) mxx = x;
+      if (z < mnz) mnz = z;
+      if (z > mxz) mxz = z;
+    }
+    if (mxx - mnx > 120 || mxz - mnz > 120) return;
+
+    // malhas com 100 mil triângulos desenhariam milhões de linhas:
+    // amostra no máximo 2.000 triângulos por prédio (continua legível).
+    const nTri = Math.floor(idx.length / 3);
+    const stride = Math.max(1, Math.ceil(nTri / 2000));
+    const out = new Float32Array(Math.ceil(nTri / stride) * 18);
+    const rot = collider.rotation();
+    const identity = Math.abs(rot.w) > 0.99999;
+    const qx = rot.x, qy = rot.y, qz = rot.z, qw = rot.w;
+    let w = 0;
+    const put = (vi: number) => {
+      let x = verts[vi]!, y = verts[vi + 1]!, z = verts[vi + 2]!;
+      if (!identity) {
+        const tx = 2 * (qy * z - qz * y);
+        const ty = 2 * (qz * x - qx * z);
+        const tz = 2 * (qx * y - qy * x);
+        const nx = x + qw * tx + (qy * tz - qz * ty);
+        const ny = y + qw * ty + (qz * tx - qx * tz);
+        const nz = z + qw * tz + (qx * ty - qy * tx);
+        x = nx; y = ny; z = nz;
+      }
+      out[w++] = x + t.x;
+      out[w++] = y + t.y;
+      out[w++] = z + t.z;
+    };
+    for (let tri = 0; tri < nTri; tri += stride) {
+      const a = idx[tri * 3]! * 3;
+      const b = idx[tri * 3 + 1]! * 3;
+      const c = idx[tri * 3 + 2]! * 3;
+      put(a); put(b);
+      put(b); put(c);
+      put(c); put(a);
+    }
+    if (!w) return;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(out.subarray(0, w), 3));
+    const obj = new THREE.LineSegments(geo, mat);
+    obj.frustumCulled = false;
+    obj.renderOrder = 999;
+    group.add(obj);
+    entry.obj = obj;
+    entry.segs = w / 6;
+    this.debugTrimeshSegments += entry.segs;
   }
 
   private openNetMenu() {

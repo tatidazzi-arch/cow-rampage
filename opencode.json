@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "playwright": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@playwright/mcp@latest",
+          "--isolated",
+          "--caps=vision,devtools",
+          "--viewport-size=1280x720",
+          "--console-level=error",
+          "--image-responses=omit",
+          "--snapshot-boxes",
+          "--output-dir=.opencode/playwright-artifacts",
+          "--init-script=.opencode/playwright-init.js"
+        ],
+        "cwd": "C:\\Users\\Miguel\\Documents\\Default Project\\cow-rampage-3d",
+        "disabled": false
+      },
+      "blender": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\Miguel\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\\uvx.exe",
+          "mcp-for-blender"
+        ],
+        "environment": {
+          "PYTHONIOENCODING": "utf-8"
+        },
+        "disabled": false
+      }
+    }
+  }
+}

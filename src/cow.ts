@@ -70,7 +70,7 @@ export class Cow {
   private saddleGroup: THREE.Group | null = null;
   /** Pose de queda (fall.glb, estática) — aparece enquanto a vaca cai. */
   private fallMesh: THREE.Mesh | null = null;
-  private fallMat: THREE.MeshLambertMaterial | null = null;
+  private fallMat: THREE.MeshStandardMaterial | null = null;
   private fallSaddlePos = new THREE.Vector3();
   private fallSaddleRot = new THREE.Quaternion();
   private modelMesh: THREE.Object3D | null = null;
@@ -399,24 +399,27 @@ export class Cow {
       const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
       const gltf = await new GLTFLoader().loadAsync('models/cow/fall.glb');
       const model = gltf.scene;
-      // as UVs desse mesh pegam o ÚTERO e os cascos do atlas da vaca (manchas
-      // rosa/cinza no corpo): remapeia pra área só do pelo (u 0.02..0.60)
-      model.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (!m.isMesh) return;
-        const uv = m.geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
-        if (!uv) return;
-        for (let i = 0; i < uv.count; i++) {
-          uv.setX(i, 0.02 + uv.getX(i) * 0.58);
-        }
-        uv.needsUpdate = true;
-      });
-      // material da vaca (textura base; normal map fica de fora — as normais
-      // do mesh low-poly nao casam com o atlas e o couro fica esquisito)
+      // MESMO material da vaca normal: as UVs originais do fall.glb já batem
+      // com o atlas; normal/roughness dão o couro felpudo igual ao modelo vivo.
+      // IMPORTANTE: UVs de glTF têm a origem no topo da imagem, então as
+      // texturas precisam de flipY=false (o GLTFLoader faz isso sozinho).
       const loader = new THREE.TextureLoader();
       const base = loader.load('models/cow/T_Cow_B.png');
       base.colorSpace = THREE.SRGBColorSpace;
-      const mat = new THREE.MeshLambertMaterial({ color: this.skin.tint, map: base });
+      base.flipY = false;
+      const normal = loader.load('models/cow/T_Cow_N.png');
+      normal.flipY = false;
+      const rough = loader.load('models/cow/T_Cow_R.png');
+      rough.flipY = false;
+      const mat = new THREE.MeshStandardMaterial({
+        color: this.skin.tint,
+        map: base,
+        normalMap: normal,
+        roughnessMap: rough,
+        roughness: this.skin.rough ?? 1,
+        metalness: this.skin.metal ?? 0,
+        envMapIntensity: this.skin.env ?? 1,
+      });
       model.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh) {
@@ -424,6 +427,9 @@ export class Cow {
           m.castShadow = true;
         }
       });
+      // o GLB vem tombado com a cabeça 21,65° pra baixo: deita no eixo Z,
+      // com o dorso pra cima (+Y), antes de medir/escalar.
+      model.rotation.set(THREE.MathUtils.degToRad(-10), 0, Math.PI / 2);
       const mb = new THREE.Box3().setFromObject(model);
       const size = mb.getSize(new THREE.Vector3());
       // MESMO tamanho da vaca normal: iguala a maior dimensão do modelo
@@ -435,23 +441,18 @@ export class Cow {
       wrap.scale.setScalar(s);
       const bb = new THREE.Box3().setFromObject(wrap);
       const c = bb.getCenter(new THREE.Vector3());
-      wrap.position.set(-c.x, -bb.min.y, -c.z);
+      // centra no MESMO ponto do corpo da vaca normal (os pés ficam na origem)
+      wrap.position.set(-c.x, HALF_H - c.y, -c.z);
       wrap.visible = false;
       this.group.add(wrap);
       this.fallMesh = wrap as unknown as THREE.Mesh;
       this.fallMat = mat;
-      // onde a sela fica na pose de queda: no DORSO da vaca tombada.
-      // Na pose, a vaca está de cabeça pra baixo e o dorso aponta pro +X
-      // (o útero/ventre fica pro -X). Medido no modelo:
+      // sela no dorso: mesma inclinação da vaca normal
       {
-        const p = new THREE.Vector3(0.2, 0.42, 0.35); // x=lombar, y=meio, z=45% da cauda
-        this.fallSaddlePos.set(
-          p.x * s + wrap.position.x,
-          p.y * s + wrap.position.y,
-          p.z * s + wrap.position.z,
-        );
-        // a sela fica "deitada" no dorso (+X) e inclinada 45° pro lado certo
-        this.fallSaddleRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -Math.PI / 4));
+        const fallH = bb.max.y - bb.min.y;
+        const backY = HALF_H + fallH * 0.28;
+        this.fallSaddlePos.set(0, backY - 1.5, 0);
+        this.fallSaddleRot.identity();
       }
       console.log(`[vaca] pose de queda: ${(size.x * s).toFixed(1)}x${(size.y * s).toFixed(1)}x${(size.z * s).toFixed(1)}m (escala ${s.toFixed(2)})`);
     } catch (err) {
@@ -524,7 +525,12 @@ export class Cow {
   setSkin(skin: Skin): void {
     this.skin = skin;
     if (this.modelReady) tintCowModel(this.group, skin);
-    if (this.fallMat) this.fallMat.color.set(skin.tint);
+    if (this.fallMat) {
+      this.fallMat.color.set(skin.tint);
+      this.fallMat.metalness = skin.metal ?? 0;
+      this.fallMat.roughness = skin.rough ?? 1;
+      this.fallMat.envMapIntensity = skin.env ?? 1;
+    }
   }
 
   private playClip(name: string, timeScale: number): void {

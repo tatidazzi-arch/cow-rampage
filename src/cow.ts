@@ -13,6 +13,8 @@ export class Cow {
   body: RAPIER.RigidBody;
   private world: RAPIER.World;
   private collider: RAPIER.Collider;
+  /** yaw com que o collider já foi girado (evita setRotation todo frame) */
+  private colliderYaw = 0;
   legs: THREE.Mesh[] = [];
   head!: THREE.Mesh;
   tail!: THREE.Mesh;
@@ -472,7 +474,6 @@ export class Cow {
       const v = new THREE.Vector3();
       const pts: number[] = [];
       let minY = 1e9, maxY = -1e9;
-      let maxX = 0, maxZ = 0;
       model.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
@@ -484,19 +485,11 @@ export class Cow {
           pts.push(v.x, v.y, v.z);
           if (v.y < minY) minY = v.y;
           if (v.y > maxY) maxY = v.y;
-          const ax = Math.abs(v.x), az = Math.abs(v.z);
-          if (ax > maxX) maxX = ax;
-          if (az > maxZ) maxZ = az;
         }
       });
-      // tampa até a altura da cabeça erguida (3.6): a pose de descanso tem a
-      // cabeça baixa, mas parede alta (loja) precisa encostar em cima também,
-      // senão a vaca escala o beiral. Borda arredondada desliza, não engancha.
-      const TOP = 3.6;
-      if (maxY < TOP) {
-        for (const sx of [-1, 1]) for (const sz of [-1, 1]) pts.push(sx * maxX, TOP, sz * maxZ);
-        maxY = TOP;
-      }
+      // sem "tampa" artificial: o hull segue o dorso real. A borda arredondada
+      // (0,25) já dá folga pra cabeça quando a animação levanta — o topo fixo
+      // antigo (3,6 m) deixava o collider ~2 m acima da vaca.
       if (pts.length < 12) return;
       // borda arredondada (igual o bevel da caixa antiga): desliza nos cantos
       const desc = RAPIER.ColliderDesc.roundConvexHull(new Float32Array(pts), 0.25);
@@ -510,6 +503,9 @@ export class Cow {
       const BORDER = 0.25;
       this.collider = this.world.createCollider(
         desc.setTranslation(0, -HALF_H - minY + BORDER, 0), this.body);
+      // collider novo nasce sem giro: reaplica o yaw atual
+      this.colliderYaw = Number.NaN;
+      this.syncColliderRotation();
       console.log(`[vaca] hull do modelo: y ${minY.toFixed(2)}..${maxY.toFixed(2)} (${(pts.length / 3).toFixed(0)} pts)`);
     } catch (err) {
       console.warn('[vaca] hull falhou, mantendo caixa:', err);
@@ -792,6 +788,16 @@ export class Cow {
     const t = this.body.translation();
     this.group.position.set(t.x, t.y - HALF_H + this.bellyLift(), t.z);
     this.group.rotation.y = this.yaw;
+    this.syncColliderRotation();
+  }
+
+  /** O corpo tem as rotações travadas (o giro é só visual): gira o collider
+   *  junto com a vaca, senão a hitbox fica sempre alinhada ao mundo. */
+  private syncColliderRotation(): void {
+    if (this.colliderYaw === this.yaw) return;
+    this.colliderYaw = this.yaw;
+    const h = this.yaw / 2;
+    this.collider.setRotation({ x: 0, y: Math.sin(h), z: 0, w: Math.cos(h) });
   }
 
   /** Deitada, o dorso encosta no chão: sobe o visual conforme rola até 180°. */

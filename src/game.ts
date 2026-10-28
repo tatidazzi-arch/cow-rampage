@@ -104,12 +104,17 @@ export class Game {
   private readonly _push = new THREE.Vector3();
   private downRay: RAPIER.Ray | null = null;
   private hudAcc = 0;
-  /** modo debug (senha debugcow): hitboxes do Rapier desenhadas em azul */
+  /** modo debug (senha debugcow): hitboxes do Rapier desenhadas em azul, só perto da vaca */
   private debugHitboxes: THREE.LineSegments | null = null;
   private debugFpsEl: HTMLDivElement | null = null;
   private debugFpsAcc = 0;
   private debugFpsFrames = 0;
   private debugFpsShown = 0;
+  /** buffer reaproveitado no recorte das linhas em volta da vaca */
+  private debugBuffer = new Float32Array(0);
+  /** nº de triângulos por collider trimesh (cache; ler o buffer todo frame travaria) */
+  private debugTriCounts = new Map<number, number>();
+  private debugSegmentsDrawn = 0;
   private missions = new MissionManager();
   private sweaterHintAt = 0;
   private wasSwimming = false;
@@ -814,18 +819,58 @@ constructor() {}
     this.debugFpsEl = el;
   }
 
-  /** Copia as linhas de debug do Rapier para o LineSegments a cada frame. */
+  /** Copia as linhas de debug do Rapier para o LineSegments a cada frame.
+   *  Só entram colliders perto da vaca e cada linha é recortada num raio de 20 m:
+   *  desenhar o mundo inteiro (terreno + construções) custava ~1 s por frame. */
   private updateDebugHitboxes(dt: number) {
     const lines = this.debugHitboxes;
     if (!lines) return;
-    const { vertices } = this.physics.debugRender();
-    const current = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
-    if (current.array.length !== vertices.length) {
-      lines.geometry.setAttribute('position', new THREE.BufferAttribute(vertices.slice(), 3));
-    } else {
-      (current.array as Float32Array).set(vertices);
-      current.needsUpdate = true;
+
+    const cow = this.cow ? this.cow.body.translation() : { x: 0, y: 0, z: 0 };
+    const cx = cow.x, cy = cow.y, cz = cow.z;
+    const RANGE = 20;
+    const near2 = RANGE * RANGE;
+    // colliders com o centro um pouco além do raio ainda entram, porque a hitbox
+    // pode terminar dentro dos 20 m; o recorte abaixo apara o excesso.
+    const pick2 = (RANGE + 8) * (RANGE + 8);
+
+    const { vertices } = this.physics.debugRender(undefined, (collider: RAPIER.Collider) => {
+      const t = collider.translation();
+      const dx = t.x - cx, dy = t.y - cy, dz = t.z - cz;
+      if (dx * dx + dy * dy + dz * dz > pick2) return false;
+      // malhas de triângulos gigantes (terreno, mansões) continuam caríssimas
+      // mesmo com poucas perto: só desenha as pequenas.
+      if (collider.shapeType() === RAPIER.ShapeType.TriMesh
+        && this.debugTriangleCount(collider) > 15000) return false;
+      return true;
+    });
+
+    let out = this.debugBuffer;
+    if (out.length < vertices.length) {
+      out = new Float32Array(vertices.length);
+      this.debugBuffer = out;
     }
+    let w = 0;
+    for (let i = 0; i + 5 < vertices.length; i += 6) {
+      const ax = vertices[i]! - cx, ay = vertices[i + 1]! - cy, az = vertices[i + 2]! - cz;
+      const bx = vertices[i + 3]! - cx, by = vertices[i + 4]! - cy, bz = vertices[i + 5]! - cz;
+      if (ax * ax + ay * ay + az * az > near2 && bx * bx + by * by + bz * bz > near2) continue;
+      out[w++] = vertices[i]!;
+      out[w++] = vertices[i + 1]!;
+      out[w++] = vertices[i + 2]!;
+      out[w++] = vertices[i + 3]!;
+      out[w++] = vertices[i + 4]!;
+      out[w++] = vertices[i + 5]!;
+    }
+    this.debugSegmentsDrawn = w / 6;
+
+    const pos = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+    if (pos.array !== out) {
+      lines.geometry.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    } else {
+      pos.needsUpdate = true;
+    }
+    lines.geometry.setDrawRange(0, w / 3);
 
     const el = this.debugFpsEl;
     if (!el) return;
@@ -835,10 +880,22 @@ constructor() {}
       const fps = this.debugFpsFrames / this.debugFpsAcc;
       const ms = (this.debugFpsAcc / this.debugFpsFrames) * 1000;
       this.debugFpsShown = Math.round(fps);
-      el.textContent = `FPS ${this.debugFpsShown} | ${ms.toFixed(1)} ms`;
+      el.textContent = `FPS ${this.debugFpsShown} | ${ms.toFixed(1)} ms | ${this.debugSegmentsDrawn} linhas`;
       this.debugFpsAcc = 0;
       this.debugFpsFrames = 0;
     }
+  }
+
+  /** Nº de triângulos de um collider trimesh (calculado uma vez por collider). */
+  private debugTriangleCount(collider: RAPIER.Collider): number {
+    const handle = collider.handle;
+    let n = this.debugTriCounts.get(handle);
+    if (n === undefined) {
+      const verts = collider.vertices();
+      n = verts ? Math.floor(verts.length / 9) : 0;
+      this.debugTriCounts.set(handle, n);
+    }
+    return n;
   }
 
   private openNetMenu() {

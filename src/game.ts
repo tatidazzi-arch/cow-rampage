@@ -104,6 +104,12 @@ export class Game {
   private readonly _push = new THREE.Vector3();
   private downRay: RAPIER.Ray | null = null;
   private hudAcc = 0;
+  /** modo debug (senha debugcow): hitboxes do Rapier desenhadas em azul */
+  private debugHitboxes: THREE.LineSegments | null = null;
+  private debugFpsEl: HTMLDivElement | null = null;
+  private debugFpsAcc = 0;
+  private debugFpsFrames = 0;
+  private debugFpsShown = 0;
   private missions = new MissionManager();
   private sweaterHintAt = 0;
   private wasSwimming = false;
@@ -742,7 +748,8 @@ constructor() {}
 
   private startGame() {
     const pw = ((document.getElementById('pwInput') as HTMLInputElement | null)?.value ?? '').trim().toLowerCase();
-    if (pw !== 'cowcow') {
+    const debug = pw === 'debugcow';
+    if (pw !== 'cowcow' && !debug) {
       const err = document.getElementById('pwError');
       if (err) err.textContent = 'Senha incorreta!';
       return;
@@ -753,7 +760,85 @@ constructor() {}
     (document.getElementById('pwInput') as HTMLInputElement | null)?.blur();
     document.getElementById('lockscreen')!.style.display = 'none';
     document.getElementById('gamemenu')!.style.display = 'flex';
+    if (debug) this.enableDebugHitboxes();
     this.refreshMenuWallet();
+  }
+
+  /** Liga as hitboxes do Rapier em azul (só pela senha debugcow). */
+  private enableDebugHitboxes() {
+    if (this.debugHitboxes) {
+      this.debugHitboxes.visible = true;
+      return;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0x2f7bff,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.frustumCulled = false;
+    lines.renderOrder = 999;
+    this.debugHitboxes = lines;
+    this.scene.add(lines);
+    this.createFpsMeter();
+    console.log('[debug] hitboxes em azul ligadas');
+  }
+
+  /** Cria o medidor de FPS do modo debug (canto superior esquerdo). */
+  private createFpsMeter() {
+    if (this.debugFpsEl) {
+      this.debugFpsEl.style.display = 'block';
+      return;
+    }
+    const el = document.createElement('div');
+    el.id = 'debugfps';
+    el.style.cssText = [
+      'position:fixed',
+      'top:10px',
+      'left:10px',
+      'z-index:9999',
+      'padding:6px 10px',
+      'border-radius:6px',
+      'background:rgba(0,0,0,0.65)',
+      'color:#4da3ff',
+      'font:600 14px/1.3 ui-monospace,Consolas,monospace',
+      'letter-spacing:0.5px',
+      'pointer-events:none',
+      'text-shadow:0 1px 2px rgba(0,0,0,0.8)',
+    ].join(';');
+    el.textContent = 'FPS --';
+    document.body.appendChild(el);
+    this.debugFpsEl = el;
+  }
+
+  /** Copia as linhas de debug do Rapier para o LineSegments a cada frame. */
+  private updateDebugHitboxes(dt: number) {
+    const lines = this.debugHitboxes;
+    if (!lines) return;
+    const { vertices } = this.physics.debugRender();
+    const current = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+    if (current.array.length !== vertices.length) {
+      lines.geometry.setAttribute('position', new THREE.BufferAttribute(vertices.slice(), 3));
+    } else {
+      (current.array as Float32Array).set(vertices);
+      current.needsUpdate = true;
+    }
+
+    const el = this.debugFpsEl;
+    if (!el) return;
+    this.debugFpsAcc += dt;
+    this.debugFpsFrames += 1;
+    if (this.debugFpsAcc >= 0.25) {
+      const fps = this.debugFpsFrames / this.debugFpsAcc;
+      const ms = (this.debugFpsAcc / this.debugFpsFrames) * 1000;
+      this.debugFpsShown = Math.round(fps);
+      el.textContent = `FPS ${this.debugFpsShown} | ${ms.toFixed(1)} ms`;
+      this.debugFpsAcc = 0;
+      this.debugFpsFrames = 0;
+    }
   }
 
   private openNetMenu() {
@@ -2346,6 +2431,7 @@ constructor() {}
       this.world.updateAnims(dt);
       this.updateCars(dt);
     }
+    if (this.debugHitboxes) this.updateDebugHitboxes(dt);
     this.renderer.render(this.scene, this.camera);
   }
 }

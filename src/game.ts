@@ -1696,13 +1696,20 @@ constructor() {}
   private cowAttack() {
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
+    // pés da vaca: cabeçada só vale se ela não estiver voando por cima do alvo
+    const feetY = this.cow.body.translation().y - COW_HALF_H;
     for (const n of this.npcs) {
-      if ((n.state !== 'walk' && n.state !== 'stare' && n.state !== 'revenge' && n.state !== 'attack') || n.vendor) continue;
+      const targetable = n.state === 'walk' || n.state === 'stare' || n.state === 'revenge'
+        || n.state === 'attack' || n.state === 'stunned' || n.state === 'fallen'
+        || n.state === 'getup';
+      if (!targetable || n.vendor || n.outCold) continue;
       const t = n.body.translation();
       const dx = t.x - cx;
       const dz = t.z - cz;
       const d = Math.hypot(dx, dz);
-      if (d < 5) {
+      // de perto o NPC já caiu (stunned) — continua valendo cabeçada; mas se a
+      // vaca está acima da cabeça dele (voando), não leva.
+      if (d < 5 && feetY < t.y + 1.3) {
         this.registerHit(n);
         this.npcFactory.complain(n);
         const push = this._push.set(dx, 0, dz).normalize().multiplyScalar(170);
@@ -1723,7 +1730,9 @@ constructor() {}
     if (this.cowAI) {
       const av = this.cowAI.cow.body.translation();
       const ad = Math.hypot(av.x - cx, av.z - cz);
-      if (ad < 5 && Math.abs(av.y - this.cow.body.translation().y) < 4) {
+      // compara os pés das duas vacas: voando por cima não acerta
+      const aiFeet = av.y - COW_HALF_H;
+      if (ad < 5 && Math.abs(aiFeet - feetY) < 2.6) {
         const l = Math.hypot(av.x - cx, av.z - cz) || 1;
         this.cowAI.cow.body.applyImpulse({
           x: ((av.x - cx) / l) * 150,
@@ -1743,7 +1752,8 @@ constructor() {}
       for (const [peerId, rc] of this.remoteCows) {
         const dx = rc.target.x - cx;
         const dz = rc.target.z - cz;
-        if (Math.hypot(dx, dz) < 5) {
+        // rc.target é a posição dos pés da vaca remota: exige mesma altura
+        if (Math.hypot(dx, dz) < 5 && Math.abs(rc.target.y - feetY) < 2.6) {
           this.net.sendHit(peerId, cx, cz);
           this.score += 3;
           this.chaos = Math.min(100, this.chaos + 5);
@@ -1989,6 +1999,8 @@ constructor() {}
   }
 
   private updateNPCs(dt: number) {
+    // pés da vaca: evita "encostar" em quem está lá embaixo quando ela voa
+    const cowFeet = this.cow.body.translation().y - COW_HALF_H;
     for (const n of this.npcs) {
       const t = n.body.translation();
       switch (n.state) {
@@ -2147,7 +2159,7 @@ constructor() {}
       const cx = this.cow.group.position.x;
       const cz = this.cow.group.position.z;
       const d = Math.hypot(t.x - cx, t.z - cz);
-      if (d < 2.4 && this.carrying !== n && !n.vendor && n.state === 'walk') {
+      if (d < 2.4 && cowFeet < t.y + 1.3 && this.carrying !== n && !n.vendor && n.state === 'walk') {
         this.setNPCState(n, 'stunned');
         this.npcFactory.complain(n);
         n.stateTimer = 3;

@@ -14,11 +14,20 @@ export class Cow {
   private world: RAPIER.World;
   private collider: RAPIER.Collider;
   /** yaw com que o collider já foi girado (evita setRotation todo frame) */
-  private colliderYaw = 0;
+  private colliderYaw = Number.NaN;
   legs: THREE.Mesh[] = [];
   head!: THREE.Mesh;
   tail!: THREE.Mesh;
-  yaw = 0;
+  private _yaw = 0;
+  /** O giro da vaca é só visual (o corpo tem lockRotations): o collider precisa
+   *  girar junto em QUALQUER atribuição de yaw (andar, foguete, carro...). */
+  get yaw(): number {
+    return this._yaw;
+  }
+  set yaw(v: number) {
+    this._yaw = v;
+    this.syncColliderRotation();
+  }
   grounded = true;
   jumpCount = 0;
   maxJumps = 5;
@@ -792,12 +801,14 @@ export class Cow {
   }
 
   /** O corpo tem as rotações travadas (o giro é só visual): gira o collider
-   *  junto com a vaca, senão a hitbox fica sempre alinhada ao mundo. */
+   *  junto com a vaca, senão a hitbox fica sempre alinhada ao mundo.
+   *  Precisa ser setRotationWrtParent: o setRotation (mundo) é desfeito no
+   *  passo seguinte, quando o Rapier recompõe o collider a partir do corpo. */
   private syncColliderRotation(): void {
-    if (this.colliderYaw === this.yaw) return;
-    this.colliderYaw = this.yaw;
-    const h = this.yaw / 2;
-    this.collider.setRotation({ x: 0, y: Math.sin(h), z: 0, w: Math.cos(h) });
+    if (!this.collider || this.colliderYaw === this._yaw) return;
+    this.colliderYaw = this._yaw;
+    const h = this._yaw / 2;
+    this.collider.setRotationWrtParent({ x: 0, y: Math.sin(h), z: 0, w: Math.cos(h) });
   }
 
   /** Deitada, o dorso encosta no chão: sobe o visual conforme rola até 180°. */

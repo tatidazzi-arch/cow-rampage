@@ -1412,7 +1412,7 @@ const towerBox = new THREE.Box3();
   }
 
   /** Carros fantasma nas avenidas (sem colisão, só visual). Caixas de fallback
-   *  até o R8 (r8.fbx) carregar; aí cada carro vira 1 mesh fundido do modelo. */
+   *  até o carro (car_sport.fbx) carregar; aí cada carro vira 1 mesh fundido. */
   private buildTraffic() {
     const carColors = [0xef4444, 0x3b82f6, 0xf59e0b, 0x10b981, 0xffffff];
     const mkCar = (color: number): THREE.Group => {
@@ -1643,11 +1643,12 @@ const towerBox = new THREE.Box3();
     console.log(`[lamp] poste carregado: ${pos.count} verts, vidro=${mergedGlass ? mergedGlass.getAttribute('position').count : 0}, braço=(${this.lampHead.x.toFixed(2)},${this.lampHead.y.toFixed(2)})`);
   }
 
-  /** Carrega o R8, funde as 168 partes em 1 geometria (cor por vértice) e troca
+  /** Carrega o carro esportivo, funde as 168 partes em 1 geometria (cor por
+   *  vértice) e troca
    *  os carros de caixa. Frente do modelo = +Z (igual às caixas). */
   private async loadCarModel(): Promise<void> {
     try {
-      const model = await new FBXLoader().loadAsync('models/car/r8.fbx');
+      const model = await new FBXLoader().loadAsync('models/car/car_sport.fbx');
       model.updateMatrixWorld(true);
       const geos: THREE.BufferGeometry[] = [];
       const dc = new THREE.Color(0x888888);
@@ -1681,7 +1682,7 @@ const towerBox = new THREE.Box3();
       });
       const merged = mergeGeometries(geos, false);
       if (!merged) {
-        console.warn('[car] fusão do R8 falhou, mantendo caixas');
+        console.warn('[car] fusão do carro falhou, mantendo caixas');
         return;
       }
       // normaliza: 4.4m de comprimento no eixo Z, centrado, fundo em y=0
@@ -1703,7 +1704,7 @@ const towerBox = new THREE.Box3();
         c.mesh.add(mesh.clone());
         c.mesh.position.y = 0.05;
       }
-      console.log(`[car] R8 carregado: ${merged.getAttribute('position').count} verts`);
+      console.log(`[car] carro carregado: ${merged.getAttribute('position').count} verts`);
     } catch (err) {
       console.warn('Modelo do carro nao carregou, mantendo caixas:', err);
     }

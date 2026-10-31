@@ -2218,7 +2218,7 @@ constructor() {}
       const th = m.rotation.y;
       const cos = Math.cos(th);
       const sin = Math.sin(th);
-      // caixa do carro no referencial local (R8: 4.4 x 2.0 + metade da vaca)
+      // caixa do carro no referencial local (carro: 4,4 x 2,0 + metade da vaca)
       const lx = dx * cos - dz * sin;
       const lz = dx * sin + dz * cos;
       if (Math.abs(lx) > 1.9 || Math.abs(lz) > 4.4) continue;
@@ -2242,7 +2242,7 @@ constructor() {}
     }
   }
 
-  /** Carros longe (>250m) nem desenham: cada R8 tem 217k vértices. */
+  /** Carros longe (>250m) nem desenham: cada carro tem 217k vértices. */
   private updateCarVisibility() {
     const t = this.cow.group.position;
     for (const c of this.world.cars) {

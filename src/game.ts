@@ -607,7 +607,6 @@ constructor() {}
       </div>
       <div id="gamemenu" style="display:none">
         <h1>COW RAMPAGE</h1>
-        <h2>🐄 Goat Simulator Edition</h2>
         <div id="menuwallet">🪙 0 DINCOW</div>
         <button id="playBtn">jogar offline</button>
         <button id="aiBtn">🤖 jogar com IA</button>

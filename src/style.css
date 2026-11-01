@@ -51,7 +51,7 @@ canvas { display: block; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; padding: 20px; box-sizing: border-box;
 }
-#gamemenu h1 { font-size: 44px; color: #000; margin: 0; text-shadow: none; letter-spacing: 1px; }
+#gamemenu h1 { font-size: 25px; color: #000; margin: 0; text-shadow: none; letter-spacing: 0.5px; white-space: nowrap; }
 #gamemenu h2 { font-size: 19px; color: #555; margin: 0 0 6px 0; }
 #menuwallet { font-size: 20px; font-weight: bold; color: #b8860b; margin-bottom: 4px; }
 #gamemenu button {
@@ -78,7 +78,7 @@ canvas { display: block; }
 @media (max-width: 700px), (orientation: portrait) {
   #start { align-items: flex-end; }
   #gamemenu { width: 100%; height: auto; max-height: 78vh; padding: 16px; gap: 9px; }
-  #gamemenu h1 { font-size: 34px; }
+  #gamemenu h1 { font-size: 23px; letter-spacing: 0.5px; }
   #gamemenu button { width: 240px; font-size: 18px; padding: 11px; }
 }
 #lockscreen, #gamemenu { display: flex; flex-direction: column; align-items: center; }

@@ -2299,7 +2299,12 @@ const towerBox = new THREE.Box3();
   /** Palácio da mansão (models/mansion/palace.fbx): 40m de largura, base no chão,
    *  hitbox = o próprio trimesh. */
   private async loadMansionPalace(cx: number, cz: number, gy: number): Promise<void> {
-    const model = await new FBXLoader().loadAsync('models/mansion/palace.fbx');
+    // As texturas do palácio já ficaram 404 em cache de navegador uma vez e a
+    // mansão aparecia preta (map vazio). ?v= força baixar de novo.
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((url) =>
+      url.includes('/mansion/') ? `${url}${url.includes('?') ? '&' : '?'}v=2` : url);
+    const model = await new FBXLoader(manager).loadAsync('models/mansion/palace.fbx');
     model.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3());
@@ -2327,6 +2332,23 @@ const towerBox = new THREE.Box3();
         m.receiveShadow = true;
       }
     });
+    // rede de segurança: textura que falhou deixa a malha preta — nesse caso
+    // tira o mapa e pinta com a cor de pedra (nunca fica preta).
+    setTimeout(() => {
+      model.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.material) return;
+        const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mm of list as THREE.MeshPhongMaterial[]) {
+          const img = mm.map?.image as HTMLImageElement | undefined;
+          if (mm.map && img && img.complete && img.naturalWidth === 0) {
+            mm.map = null;
+            mm.color.setHex(0xd7d2c6);
+            mm.needsUpdate = true;
+          }
+        }
+      });
+    }, 4000);
     this.scene.add(wrap);
     // hitbox = o próprio palácio (trimesh fatiado do visual: escada e
     // colunas valem de verdade; portas/reentrâncias valem)

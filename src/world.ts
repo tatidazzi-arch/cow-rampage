@@ -127,7 +127,16 @@ export class World {
   private pumpT = 0;
   /** Animados do mapa-guia: moinho, carros, fumaça, fogueira */
   windmillBlades: THREE.Group | null = null;
-  cars: { mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number; min: number; max: number; v: number; blockT: number; rage: boolean }[] = [];
+  cars: {
+    mesh: THREE.Group; axis: 'x' | 'z'; dir: number; speed: number;
+    min: number; max: number; v: number; blockT: number; rage: boolean;
+    /** true = o jogador está no volante (sai do trânsito automático) */
+    pilot?: boolean;
+    /** velocidade vertical do carro (turbo em ladeira faz voar) */
+    vy?: number;
+    /** instante (performance.now) em que o turbo libera de novo */
+    boostCD?: number;
+  }[] = [];
   smoke: { mesh: THREE.Mesh; speed: number; maxY: number }[] = [];
   fireLight: THREE.PointLight | null = null;
   private animT = 0;
@@ -1417,6 +1426,8 @@ const towerBox = new THREE.Box3();
     const carColors = [0xef4444, 0x3b82f6, 0xf59e0b, 0x10b981, 0xffffff];
     const mkCar = (color: number): THREE.Group => {
       const car = new THREE.Group();
+      // yaw primeiro, depois pitch: permite empinar na ladeira sem torcer
+      car.rotation.order = 'YXZ';
       const bodyM = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 3.2),
         new THREE.MeshLambertMaterial({ color }));
       bodyM.position.y = 0.6;

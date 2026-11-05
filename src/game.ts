@@ -70,6 +70,16 @@ export class Game {
   private carrying: NPCPhysics | null = null;
   /** Carro que a vaca pegou (dirigindo): null = a pé. */
   private ridingCar: (typeof this.world.cars)[number] | null = null;
+  /** true = no volante (WASD/Q); false = passageiro (o carro anda sozinho). */
+  private driving = false;
+  /** Trava de 3s após entrar: segurar/soltar E não pode entrar e sair na mesma hora. */
+  private carLockT = 0;
+  /** Segurar E perto do carro: solta rápido = passageiro, segura = volante. */
+  private eDownPrev = false;
+  private eHoldT = 0;
+  private ePendingCar: (typeof this.world.cars)[number] | null = null;
+  /** Quando cada NPC foi atropelado pela última vez (evita bater todo frame). */
+  private runOverAt = new Map<number, number>();
   private camDist = 16;
   private camYaw = 0;
   private camPitch = 0.45;
@@ -1345,7 +1355,13 @@ constructor() {}
     let status = '';
     const cx = this.cow.group.position.x;
     const cz = this.cow.group.position.z;
-    if (this.carrying) {
+    if (this.ridingCar) {
+      status = this.driving
+        ? (this.carLockT > 0
+          ? `🚗 no volante · [E] libera em ${Math.ceil(this.carLockT)}s`
+          : '🚗 W/S acelera · A/D vira · Q TURBO · solte E pra descer')
+        : (this.carLockT > 0 ? `🚗 passageiro · [E] libera em ${Math.ceil(this.carLockT)}s` : '[E] descer do carro');
+    } else if (this.carrying) {
       status = 'Carregando! [E] Canhao | [F] Soltar';
     } else if (Math.hypot(this.world.skinShop.x - cx, this.world.skinShop.z - cz) < 7) {
       status = '[E] Loja de skins 🐐';
@@ -1360,6 +1376,7 @@ constructor() {}
       if (nearCannon) status = '[E] DISPARAR canhao!';
       else if (emptyCannon) status = 'Canhao vazio - pegue alguem [E]';
       else if (nearNPC) status = '[E] Pegar pessoa';
+      else if (this.nearestCar(12)) status = '[E] toque: passageiro · SEGURE: dirigir';
     }
     document.getElementById('carry-status')!.textContent = status;
 
@@ -1495,21 +1512,6 @@ constructor() {}
       }
     }
 
-    // carro colado na vaca: entra nele (tem prioridade sobre pegar NPC)
-    if (!this.carrying) {
-      let nearCar: (typeof this.world.cars)[number] | null = null;
-      // raio generoso: o carro anda 12m/s, a vaca pula pra dentro de longe
-      let carDist = 9;
-      for (const c of this.world.cars) {
-        const d = Math.hypot(c.mesh.position.x - cx, c.mesh.position.z - cz);
-        if (d < carDist) { carDist = d; nearCar = c; }
-      }
-      if (nearCar) {
-        this.enterCar(nearCar);
-        return;
-      }
-    }
-
     if (this.carrying) {
       const near = this.world.cannons.find((c) => Math.hypot(c.x - cx, c.z - cz) < 10);
       if (near) {
@@ -1580,13 +1582,30 @@ constructor() {}
     }
   }
 
-  /** Entra no carro: a vaca vira passageira (some do visual, sem colisão). */
-  private enterCar(car: (typeof this.world.cars)[number]): void {
+  /** Carro mais próximo dentro do raio (null se nenhum). */
+  private nearestCar(radius: number): (typeof this.world.cars)[number] | null {
+    const cx = this.cow.group.position.x;
+    const cz = this.cow.group.position.z;
+    let best: (typeof this.world.cars)[number] | null = null;
+    let bestD = radius;
+    for (const c of this.world.cars) {
+      const d = Math.hypot(c.mesh.position.x - cx, c.mesh.position.z - cz);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best;
+  }
+
+  /** Entra no carro: passageiro (o carro segue o trânsito) ou no volante. */
+  private enterCar(car: (typeof this.world.cars)[number], pilot = false): void {
     this.ridingCar = car;
+    this.driving = pilot;
+    this.carLockT = 3; // 3s sem [E] pra não sair no mesmo segurado que entrou
+    car.pilot = pilot;
+    car.blockT = 0;
     this.cow.group.visible = false;
     this.cow.setGhost(true);
     this.cow.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-    this.showMessage('Entrou no carro! [E] pra descer');
+    this.showMessage(pilot ? 'No volante! W/S acelera, A/D vira, Q turbo' : 'Entrou no carro! [E] pra descer');
     playSfx('click');
   }
 
@@ -1595,14 +1614,30 @@ constructor() {}
     const car = this.ridingCar;
     if (!car) return;
     this.ridingCar = null;
+    this.driving = false;
+    car.pilot = false;
+    car.vy = 0;
+    // volta pro trânsito no eixo mais próximo da direção em que ficou
+    const m = car.mesh;
+    const yaw = m.rotation.y;
+    if (Math.abs(Math.sin(yaw)) > Math.abs(Math.cos(yaw))) {
+      car.axis = 'x';
+      car.dir = Math.sin(yaw) >= 0 ? 1 : -1;
+    } else {
+      car.axis = 'z';
+      car.dir = Math.cos(yaw) >= 0 ? 1 : -1;
+    }
+    m.rotation.y = car.axis === 'z'
+      ? (car.dir > 0 ? 0 : Math.PI)
+      : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+    m.rotation.x = 0;
+    m.position.y = this.world.groundHeight(m.position.x, m.position.z) + 0.05;
+    car.v = Math.min(car.v, 6);
     this.cow.group.visible = true;
     this.cow.setGhost(false);
-    const m = car.mesh;
-    // desce pro lado (perpendicular à direção do carro)
-    const dirX = car.axis === 'z' ? 0 : car.dir;
-    const dirZ = car.axis === 'z' ? car.dir : 0;
-    const sideX = -dirZ;
-    const sideZ = dirX;
+    // desce pro lado (perpendicular à direção em que o carro ficou)
+    const sideX = Math.cos(m.rotation.y);
+    const sideZ = -Math.sin(m.rotation.y);
     this.cow.body.setTranslation({
       x: m.position.x + sideX * 4.5,
       y: m.position.y + 5,
@@ -1611,6 +1646,109 @@ constructor() {}
     this.cow.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.showMessage('Desceu do carro!');
     playSfx('click');
+  }
+
+  /** Turbo do carro: embala; em ladeira (nariz pra cima) decola e atropela. */
+  private carBoost(): void {
+    const car = this.ridingCar;
+    if (!car) return;
+    const now = performance.now();
+    if (now < (car.boostCD ?? 0)) return;
+    car.boostCD = now + 700;
+    const m = car.mesh;
+    const fx = Math.sin(m.rotation.y);
+    const fz = Math.cos(m.rotation.y);
+    // ladeira: frente mais alta que a traseira = rampa -> o turbo vira decolagem
+    const frontH = this.world.groundHeight(m.position.x + fx * 3.5, m.position.z + fz * 3.5);
+    const rearH = this.world.groundHeight(m.position.x - fx * 3.5, m.position.z - fz * 3.5);
+    const slope = (frontH - rearH) / 7;
+    const onGround = m.position.y <= this.world.groundHeight(m.position.x, m.position.z) + 0.4;
+    car.v = Math.min(60, Math.max(30, car.v + 18));
+    if (onGround && slope > 0.06) {
+      // rampa converte velocidade em subida: sempre sobra empuxo pra decolar
+      car.vy = Math.max(car.vy ?? 0, Math.min(60, 10 + slope * Math.abs(car.v) * 2.2));
+    }
+    this.spawnParticles(m.position.x - fx * 2, m.position.y + 0.7, m.position.z - fz * 2, 14, 0xffa42b);
+    this.spawnParticles(m.position.x - fx * 2, m.position.y + 0.5, m.position.z - fz * 2, 8, 0xffe066);
+    playSfx('clang');
+    this.input.rumble(1, 0.8, 220);
+  }
+
+  /** Carro na mão do jogador: W/S acelera/freia, A/D vira, Q turbo. */
+  private updateDrivenCar(dt: number) {
+    const car = this.ridingCar;
+    if (!car || !this.driving) return;
+    const m = car.mesh;
+    // joystick do celular/controle também dirige
+    const fwd = Math.max(-1, Math.min(1,
+      ((this.input.isDown('KeyW', 'ArrowUp') ? 1 : 0) - (this.input.isDown('KeyS', 'ArrowDown') ? 1 : 0))
+      + this.input.joyF));
+    const steer = Math.max(-1, Math.min(1,
+      ((this.input.isDown('KeyD', 'ArrowRight') ? 1 : 0) - (this.input.isDown('KeyA', 'ArrowLeft') ? 1 : 0))
+      + this.input.joyS));
+    // acelera / freia / ré
+    if (fwd > 0.1) car.v += 20 * fwd * dt;
+    else if (fwd < -0.1) car.v += (car.v > 0.5 ? -34 : 10 * fwd) * dt;
+    else car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), 7 * dt);
+    car.v = Math.max(-9, Math.min(60, car.v));
+    // vira: só com o carro andando (e invertido de ré)
+    const grip = Math.min(1, Math.abs(car.v) / 5);
+    m.rotation.y -= steer * 1.9 * grip * dt * (car.v < 0 ? -1 : 1);
+    const fx = Math.sin(m.rotation.y);
+    const fz = Math.cos(m.rotation.y);
+    m.position.x += fx * car.v * dt;
+    m.position.z += fz * car.v * dt;
+    // não sai da ilha
+    m.position.x = Math.max(-1420, Math.min(1420, m.position.x));
+    m.position.z = Math.max(-1420, Math.min(1420, m.position.z));
+    // vertical: turbo + ladeira = voo; gravidade traz de volta
+    const ground = this.world.groundHeight(m.position.x, m.position.z) + 0.05;
+    let vy = car.vy ?? 0;
+    const airborne = m.position.y > ground + 0.05 || vy > 0.01;
+    if (airborne) {
+      vy -= 23 * dt;
+      m.position.y += vy * dt;
+      if (m.position.y <= ground) { m.position.y = ground; vy = 0; }
+    } else {
+      m.position.y = ground;
+      vy = 0;
+    }
+    car.vy = vy;
+    // pitch: sobe na ladeira / aponta pro voo, e volta ao normal no chão
+    const frontH = this.world.groundHeight(m.position.x + fx * 3, m.position.z + fz * 3);
+    const rearH = this.world.groundHeight(m.position.x - fx * 3, m.position.z - fz * 3);
+    const slope = (frontH - rearH) / 6;
+    const targetPitch = airborne
+      ? -Math.atan2(vy, Math.max(8, Math.abs(car.v)))
+      : -Math.atan(slope);
+    m.rotation.x += (targetPitch - m.rotation.x) * Math.min(1, dt * 7);
+    // atropela quem estiver na frente (inclusive voando baixo)
+    const now = performance.now();
+    for (const n of this.npcs) {
+      if (n.vendor || n.outCold) continue;
+      const st = n.state;
+      if (st === 'carried' || st === 'inCannon' || st === 'launched') continue;
+      const t = n.body.translation();
+      if (Math.abs(t.y - m.position.y) > 3.5) continue;
+      const dx = t.x - m.position.x;
+      const dz = t.z - m.position.z;
+      const dF = dx * fx + dz * fz;
+      const dL = Math.abs(dx * fz - dz * fx);
+      if (dF < -2.2 || dF > 3.4 || dL > 1.8) continue;
+      if (now - (this.runOverAt.get(n.id) ?? 0) < 600) continue;
+      this.runOverAt.set(n.id, now);
+      this.registerHit(n);
+      this.npcFactory.complain(n);
+      const sp = Math.max(12, Math.abs(car.v));
+      n.body.applyImpulse({ x: fx * sp * 16, y: 80 + sp * 5, z: fz * sp * 16 }, true);
+      playSfx('thud');
+      this.score += 3;
+      this.chaos = Math.min(100, this.chaos + 4);
+      this.missions.event('knock');
+      if (this.netActive) this.net.sendBoom('ATROPELOU!', t.x, t.y + 1, t.z);
+      this.spawnParticles(t.x, t.y + 1, t.z, 8, 0xff4444);
+      this.input.rumble(0.8, 0.5, 160);
+    }
   }
 
   private dropCarried() {
@@ -2257,6 +2395,7 @@ constructor() {}
     const cp = this.cow.group.position;
     const cowY = this.cow.body.translation().y;
     for (const c of this.world.cars) {
+      if (c.pilot) continue; // o carro do jogador é dirigido no updateDrivenCar
       const m = c.mesh;
       const fx = c.axis === 'z' ? 0 : c.dir;
       const fz = c.axis === 'z' ? c.dir : 0;
@@ -2425,13 +2564,46 @@ constructor() {}
       this.camDist = Math.max(8, Math.min(3000, this.camDist * (1 + wd * 0.002)));
     }
 
-    if (this.input.isDown('KeyE')) {
-      this.input.keys['KeyE'] = false;
-      this.doInteract();
+    // [E] interagir. Perto do carro: toque = passageiro, segurar = volante.
+    // No volante, soltar E desce — mas só depois de 3s (senão entra e sai junto).
+    const eDown = this.input.isDown('KeyE');
+    const ePressed = eDown && !this.eDownPrev;
+    const eReleased = !eDown && this.eDownPrev;
+    this.eDownPrev = eDown;
+    if (this.carLockT > 0) this.carLockT = Math.max(0, this.carLockT - dt);
+    const eLocked = this.carLockT > 0;
+    if (this.ridingCar) {
+      if (this.driving) {
+        // sair: aperta E de novo (ou solta, se ainda estiver segurando)
+        if ((ePressed || eReleased) && !eLocked) this.exitCar();
+      } else if (ePressed && !eLocked) {
+        this.exitCar();
+      }
+    } else if (ePressed && !eLocked) {
+      const nearCar = this.carrying ? null : this.nearestCar(12);
+      if (nearCar) {
+        this.ePendingCar = nearCar;
+        this.eHoldT = 0;
+      } else {
+        this.doInteract();
+      }
+    }
+    if (this.ePendingCar) {
+      this.eHoldT += dt;
+      if (!eDown) {
+        const car = this.ePendingCar;
+        this.ePendingCar = null;
+        this.enterCar(car, false); // toque rápido: passageiro
+      } else if (this.eHoldT >= 0.35) {
+        const car = this.ePendingCar;
+        this.ePendingCar = null;
+        this.enterCar(car, true); // segurou: assume o volante
+      }
     }
     if (this.input.isDown('KeyQ')) {
       this.input.keys['KeyQ'] = false;
-      this.cowAttack();
+      if (this.ridingCar && this.driving) this.carBoost();
+      else this.cowAttack();
     }
     if (this.input.isDown('KeyF') && this.carrying) {
       this.input.keys['KeyF'] = false;
@@ -2442,6 +2614,8 @@ constructor() {}
     if (this.input.consumeOnce('Digit3')) this.setGadget('biblia');
     if (this.input.consumeOnce('KeyM')) this.toggleSound();
 
+    // carro pilotado: dirige antes de a vaca “viajar” com ele
+    this.updateDrivenCar(dt);
     // dentro do carro: a vaca viaja com ele (sem física, sem colisão)
     if (this.ridingCar) {
       const m = this.ridingCar.mesh;

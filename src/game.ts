@@ -1359,7 +1359,7 @@ constructor() {}
       status = this.driving
         ? (this.carLockT > 0
           ? `🚗 no volante · [E] libera em ${Math.ceil(this.carLockT)}s`
-          : '🚗 W/S acelera · A/D vira · Q TURBO · solte E pra descer')
+          : '🚗 W/S acelera · A/D vira · Q TURBO · [E] descer')
         : (this.carLockT > 0 ? `🚗 passageiro · [E] libera em ${Math.ceil(this.carLockT)}s` : '[E] descer do carro');
     } else if (this.carrying) {
       status = 'Carregando! [E] Canhao | [F] Soltar';
@@ -2594,7 +2594,7 @@ constructor() {}
         const car = this.ePendingCar;
         this.ePendingCar = null;
         this.enterCar(car, false); // toque rápido: passageiro
-      } else if (this.eHoldT >= 0.35) {
+      } else if (this.eHoldT >= 0.25) {
         const car = this.ePendingCar;
         this.ePendingCar = null;
         this.enterCar(car, true); // segurou: assume o volante
